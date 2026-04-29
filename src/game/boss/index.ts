@@ -22,6 +22,7 @@ import {
   Object3D,
   PlaneGeometry,
   RingGeometry,
+  ShaderMaterial,
   SphereGeometry,
   Vector3,
 } from 'three';
@@ -47,6 +48,21 @@ import {
   type ArchetypeDef,
 } from '../mobs/archetypes';
 import { MOB_RUNTIME, type MobRuntime } from '../mobs/ai';
+import {
+  buildBossCape,
+  buildRuneTelegraphMaterial,
+  flashPhaseTwoOverlay,
+  spawnDeathSoul,
+  spawnGroundCrack,
+  spawnPhaseTwoBurst,
+  spawnScytheTrail,
+  tickBossCape,
+  tickDeathCinematics,
+  tickPhaseTwoBursts,
+  tickScytheTrail,
+  type BossCapeRig,
+  type ScytheTrail,
+} from './cinematic';
 
 // ============================================================================
 // CONSTANTS
@@ -99,7 +115,11 @@ interface BossRuntime {
   attackState: AttackInstanceState | null;
   // Visual rig refs for animation
   rig: Group;
-  cloakPlanes: Mesh[];
+  cloakPlanes: Mesh[]; // legacy — kept empty after cape upgrade for type compat
+  cape: BossCapeRig | null;
+  bladeMat: MeshStandardMaterial | null;
+  scytheParent: Object3D | null;
+  scytheTrails: ScytheTrail[];
   flashMaterials: MeshStandardMaterial[];
   origColors: number[];
   flashEndTime: number;
@@ -143,8 +163,12 @@ interface TelegraphHandle {
   obj: Object3D;
   startTime: number;
   endTime: number;
-  // For animated fill — one of these will be a flat ring/plane material we tween
+  // Legacy alpha hint — the rune shader uses uProgress instead, but we keep
+  // a MeshBasicMaterial reference for the outer ring fallback so the type
+  // stays compat with the other code paths that call it.
   fillMat: MeshBasicMaterial;
+  // The rune shader material (where applicable).
+  runeMat: ShaderMaterial | null;
   removed: boolean;
 }
 
@@ -209,7 +233,7 @@ export function initBoss(ctx: GameContext): void {
 // ============================================================================
 
 function spawnBoss(ctx: GameContext): Entity {
-  const { rig, cloakPlanes, flashMaterials } = buildBossRig();
+  const { rig, cloakPlanes, flashMaterials, cape, bladeMat, scytheParent } = buildBossRig();
   rig.position.copy(BOSS_SPAWN_POS);
   rig.position.y -= 1; // start sunken (1m below floor) — intro raises it
 
@@ -270,6 +294,10 @@ function spawnBoss(ctx: GameContext): Entity {
     attackState: null,
     rig,
     cloakPlanes,
+    cape,
+    bladeMat,
+    scytheParent,
+    scytheTrails: [],
     flashMaterials,
     origColors: flashMaterials.map((m) => m.color.getHex()),
     flashEndTime: 0,
@@ -299,6 +327,9 @@ function buildBossRig(): {
   rig: Group;
   cloakPlanes: Mesh[];
   flashMaterials: MeshStandardMaterial[];
+  cape: BossCapeRig;
+  bladeMat: MeshStandardMaterial;
+  scytheParent: Object3D;
 } {
   const rig = new Group();
   const flashMaterials: MeshStandardMaterial[] = [];
@@ -374,7 +405,10 @@ function buildBossRig(): {
     rig.add(claw);
   }
 
-  // Oversized scythe in right hand
+  // Oversized scythe in right hand — wrapped in a parent so the trail can ride along.
+  const scytheParent = new Group();
+  rig.add(scytheParent);
+
   const scytheMat = new MeshStandardMaterial({
     color: 0x202020,
     roughness: 0.4,
@@ -383,42 +417,39 @@ function buildBossRig(): {
   const scytheShaft = new Mesh(new CylinderGeometry(0.06, 0.06, 3.2, 8), scytheMat);
   scytheShaft.position.set(1.4, 2.4, 0.1);
   scytheShaft.rotation.z = -0.25;
-  rig.add(scytheShaft);
+  scytheParent.add(scytheShaft);
 
   const bladeMat = new MeshStandardMaterial({
     color: 0x303030,
-    roughness: 0.3,
-    metalness: 0.9,
+    roughness: 0.25,
+    metalness: 0.95,
     emissive: COLOR_CRIMSON,
-    emissiveIntensity: 0.6,
+    emissiveIntensity: 1.2,
   });
   const blade = new Mesh(new ConeGeometry(0.55, 1.5, 4), bladeMat);
   blade.position.set(1.7, 4.0, 0.1);
   blade.rotation.z = Math.PI / 2;
   blade.rotation.y = Math.PI / 4;
-  rig.add(blade);
+  scytheParent.add(blade);
 
-  // Tattered cloak — several plane meshes around the body
-  const cloakMat = new MeshStandardMaterial({
-    color: COLOR_CRIMSON,
-    roughness: 0.95,
-    metalness: 0,
-    side: DoubleSide,
+  // Blade edge: thin emissive ring along the cone tip for the "glint" feel.
+  const edgeMat = new MeshBasicMaterial({
+    color: 0xff5040,
     transparent: true,
     opacity: 0.85,
-    emissive: 0x300000,
-    emissiveIntensity: 0.3,
+    blending: AdditiveBlending,
+    depthWrite: false,
   });
-  flashMaterials.push(cloakMat);
-  for (let i = 0; i < 8; i++) {
-    const angle = (i / 8) * Math.PI * 2;
-    const plane = new Mesh(new PlaneGeometry(0.7, 2.6), cloakMat);
-    plane.position.set(Math.cos(angle) * 0.95, 1.6, Math.sin(angle) * 0.95);
-    plane.rotation.y = -angle + Math.PI / 2;
-    plane.rotation.x = (Math.random() - 0.5) * 0.2;
-    rig.add(plane);
-    cloakPlanes.push(plane);
-  }
+  const edge = new Mesh(new RingGeometry(0.4, 0.62, 18, 1, Math.PI * 0.05, Math.PI * 0.9), edgeMat);
+  edge.position.set(1.8, 4.05, 0.08);
+  edge.rotation.x = Math.PI / 2;
+  edge.rotation.z = Math.PI / 4;
+  scytheParent.add(edge);
+
+  // Ribbon cape (single mesh, vertex-shader sway + velocity-aware drag).
+  const cape = buildBossCape(new Vector3());
+  cape.mesh.position.set(0, 3.4, 0); // anchor at shoulders, hangs down
+  rig.add(cape.mesh);
 
   // Inner aura — back-side sphere giving a faint dark crimson glow
   const auraMat = new MeshBasicMaterial({
@@ -433,7 +464,7 @@ function buildBossRig(): {
   aura.position.y = 2.0;
   rig.add(aura);
 
-  return { rig, cloakPlanes, flashMaterials };
+  return { rig, cloakPlanes, flashMaterials, cape, bladeMat, scytheParent };
 }
 
 // ============================================================================
@@ -446,8 +477,15 @@ function bossAISystem(world: World, boss: Entity, now: number, dt: number): void
   if (!rt || !health) return;
 
   // Always: cloak motion, eye pulse
-  animateCloak(rt, now);
+  animateCloak(rt, now, dt, boss.object3d.position);
   animateTelegraphs(now, rt);
+  // Cinematic helpers (singletons that drive scene-level extras).
+  tickPhaseTwoBursts(now);
+  tickDeathCinematics(now);
+  // Scythe trails — cull finished entries.
+  for (let i = rt.scytheTrails.length - 1; i >= 0; i--) {
+    if (tickScytheTrail(rt.scytheTrails[i]!, now)) rt.scytheTrails.splice(i, 1);
+  }
 
   // Damage flash decay
   if (rt.flashEndTime > 0 && now >= rt.flashEndTime) {
@@ -660,6 +698,11 @@ function startCleave(world: World, boss: Entity, rt: BossRuntime, now: number): 
   const tg = spawnArcTelegraph(world.scene, boss.object3d.position, yaw, 4, Math.PI / 2, now, now + 1.0);
   rt.telegraphs.add(tg);
   rt.attackState = { kind: 'cleave', windupEnd: now + 1.0, aimYaw: yaw, telegraph: tg };
+
+  // Scythe sweep trail visual on the scythe parent.
+  if (rt.scytheParent) {
+    rt.scytheTrails.push(spawnScytheTrail(rt.scytheParent, now));
+  }
 }
 
 function updateCleave(world: World, boss: Entity, rt: BossRuntime, st: AttackInstanceState, now: number): boolean {
@@ -692,6 +735,9 @@ function updateCleave(world: World, boss: Entity, rt: BossRuntime, st: AttackIns
   }
   world.emit('fx:screenshake', { amplitude: 0.25, duration: 0.2 });
   world.emit('audio:sfx', { id: 'boss-cleave' });
+
+  // Brief crimson burst at boss position on commit.
+  spawnPhaseTwoBurst(world.scene, boss.object3d.position, now);
   return true;
 }
 
@@ -1195,6 +1241,14 @@ function triggerPhaseTransition(world: World, boss: Entity, rt: BossRuntime, now
   world.emit('fx:hitstop', { duration: 0.12 });
   world.emit('audio:sfx', { id: 'boss-scream' });
 
+  // Cinematic flourishes (visual-only).
+  flashPhaseTwoOverlay();
+  spawnPhaseTwoBurst(world.scene, boss.object3d.position, now);
+  if (rt.bladeMat) {
+    rt.bladeMat.emissive.setHex(0xff3010);
+    rt.bladeMat.emissiveIntensity = 2.4;
+  }
+
   setBarPhaseMark(2);
 }
 
@@ -1214,11 +1268,11 @@ function cancelAttack(world: World, rt: BossRuntime): void {
 // DEATH
 // ============================================================================
 
-function triggerBossDeath(world: World, _boss: Entity, rt: BossRuntime): void {
+function triggerBossDeath(world: World, boss: Entity, rt: BossRuntime): void {
   if (rt.death.active) return;
   rt.death.active = true;
   rt.death.startTime = performance.now() / 1000;
-  rt.death.duration = 2.0;
+  rt.death.duration = 2.6;
 
   // Cleanup any active visuals
   for (const tg of rt.telegraphs) {
@@ -1232,6 +1286,13 @@ function triggerBossDeath(world: World, _boss: Entity, rt: BossRuntime): void {
   world.emit('fx:screenshake', { amplitude: 0.8, duration: 1.0 });
   world.emit('audio:sfx', { id: 'boss-death' });
   world.emit('fx:hitstop', { duration: 0.2 });
+
+  // Ground crack + soul visuals.
+  spawnGroundCrack(world.scene, boss.object3d.position, rt.death.startTime);
+  // Soul rises a bit later (after the body slumps).
+  setTimeout(() => {
+    spawnDeathSoul(world.scene, boss.object3d.position, performance.now() / 1000);
+  }, 700);
 }
 
 function advanceDeath(world: World, boss: Entity, rt: BossRuntime, now: number): void {
@@ -1269,8 +1330,13 @@ function advanceDeath(world: World, boss: Entity, rt: BossRuntime, now: number):
 // COSMETIC ANIMATION HELPERS
 // ============================================================================
 
-function animateCloak(rt: BossRuntime, now: number): void {
-  // Cloak planes drift / flutter
+function animateCloak(rt: BossRuntime, now: number, dt: number, bossPos: Vector3): void {
+  // Ribbon cape: hand current world position + dt to its tick.
+  if (rt.cape) {
+    tickBossCape(rt.cape, bossPos, now, dt);
+    rt.cape.mat.uniforms.uPhaseTwo.value = rt.phase === 2 ? 1 : 0;
+  }
+  // Legacy plane fallback (shouldn't fire after upgrade).
   const intensity = rt.phase === 2 ? 1.6 : 1.0;
   for (let i = 0; i < rt.cloakPlanes.length; i++) {
     const cp = rt.cloakPlanes[i]!;
@@ -1293,21 +1359,17 @@ function flashBoss(rt: BossRuntime): void {
 // ============================================================================
 
 function spawnCircleTelegraph(scene: Object3D, center: Vector3, radius: number, startTime: number, endTime: number): TelegraphHandle {
-  const fillMat = new MeshBasicMaterial({
-    color: COLOR_TELEGRAPH,
-    transparent: true,
-    opacity: 0.18,
-    side: DoubleSide,
-    depthWrite: false,
-  });
-  const fill = new Mesh(new CircleGeometry(radius, 32), fillMat);
+  // Rune shader fill.
+  const runeMat = buildRuneTelegraphMaterial({ variant: 'circle', color: COLOR_TELEGRAPH });
+  const fill = new Mesh(new CircleGeometry(radius, 48), runeMat);
   fill.rotation.x = -Math.PI / 2;
   fill.position.set(center.x, 0.05, center.z);
 
+  // Crisp outer ring on top.
   const ringMat = new MeshBasicMaterial({
     color: COLOR_TELEGRAPH,
     transparent: true,
-    opacity: 0.9,
+    opacity: 0.92,
     side: DoubleSide,
     depthWrite: false,
   });
@@ -1320,20 +1382,14 @@ function spawnCircleTelegraph(scene: Object3D, center: Vector3, radius: number, 
   group.add(ring);
   scene.add(group);
 
-  return { obj: group, startTime, endTime, fillMat, removed: false };
+  // Legacy fillMat must be a MeshBasicMaterial (TelegraphHandle requires it).
+  return { obj: group, startTime, endTime, fillMat: ringMat, runeMat, removed: false };
 }
 
 function spawnArcTelegraph(scene: Object3D, center: Vector3, yaw: number, radius: number, arc: number, startTime: number, endTime: number): TelegraphHandle {
-  // Use a RingGeometry with thetaStart/thetaLength for the arc
-  const fillMat = new MeshBasicMaterial({
-    color: COLOR_TELEGRAPH,
-    transparent: true,
-    opacity: 0.22,
-    side: DoubleSide,
-    depthWrite: false,
-  });
+  const runeMat = buildRuneTelegraphMaterial({ variant: 'arc', color: COLOR_TELEGRAPH });
   const thetaStart = -arc / 2 + Math.PI / 2 - yaw;
-  const fill = new Mesh(new RingGeometry(0.2, radius, 32, 1, thetaStart, arc), fillMat);
+  const fill = new Mesh(new RingGeometry(0.2, radius, 48, 1, thetaStart, arc), runeMat);
   fill.rotation.x = -Math.PI / 2;
   fill.position.set(center.x, 0.05, center.z);
 
@@ -1352,20 +1408,13 @@ function spawnArcTelegraph(scene: Object3D, center: Vector3, yaw: number, radius
   group.add(fill);
   group.add(edge);
   scene.add(group);
-  return { obj: group, startTime, endTime, fillMat, removed: false };
+  return { obj: group, startTime, endTime, fillMat: edgeMat, runeMat, removed: false };
 }
 
 function spawnLineTelegraph(scene: Object3D, origin: Vector3, dir: Vector3, length: number, width: number, startTime: number, endTime: number): TelegraphHandle {
-  const fillMat = new MeshBasicMaterial({
-    color: COLOR_TELEGRAPH,
-    transparent: true,
-    opacity: 0.22,
-    side: DoubleSide,
-    depthWrite: false,
-  });
-  const plane = new Mesh(new PlaneGeometry(width, length), fillMat);
+  const runeMat = buildRuneTelegraphMaterial({ variant: 'line', color: COLOR_TELEGRAPH });
+  const plane = new Mesh(new PlaneGeometry(width, length), runeMat);
   plane.rotation.x = -Math.PI / 2;
-  // Position center at origin + dir * length/2
   plane.position.set(
     origin.x + dir.x * length * 0.5,
     0.05,
@@ -1373,7 +1422,10 @@ function spawnLineTelegraph(scene: Object3D, origin: Vector3, dir: Vector3, leng
   );
   plane.rotation.z = Math.atan2(dir.x, dir.z);
   scene.add(plane);
-  return { obj: plane, startTime, endTime, fillMat, removed: false };
+  // Sentinel fillMat — needed to satisfy TelegraphHandle.fillMat type. Kept
+  // unused since rune shader handles all visuals.
+  const sentinelMat = new MeshBasicMaterial({ visible: false });
+  return { obj: plane, startTime, endTime, fillMat: sentinelMat, runeMat, removed: false };
 }
 
 function spawnSpikeBurst(scene: Object3D, pos: Vector3, _now: number): void {
@@ -1419,8 +1471,13 @@ function animateTelegraphs(now: number, rt: BossRuntime): void {
   for (const tg of rt.telegraphs) {
     if (tg.removed) continue;
     const t = (now - tg.startTime) / Math.max(0.01, tg.endTime - tg.startTime);
-    // Pulsing fill — base 0.18 to 0.55 ramp + sine flicker
-    const baseOpacity = 0.18 + Math.min(1, t) * 0.4;
+    if (tg.runeMat) {
+      tg.runeMat.uniforms.uTime.value = now;
+      tg.runeMat.uniforms.uProgress.value = Math.min(1, Math.max(0, t));
+      tg.runeMat.uniforms.uAlpha.value = 0.55 + Math.min(1, t) * 0.35;
+    }
+    // Outer ring (kept for crisp silhouette) flickers slightly.
+    const baseOpacity = 0.7 + Math.min(1, t) * 0.25;
     const flicker = Math.sin(now * 18) * 0.05;
     tg.fillMat.opacity = Math.max(0, baseOpacity + flicker);
   }

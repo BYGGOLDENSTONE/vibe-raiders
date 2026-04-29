@@ -53,20 +53,24 @@ export function generateLayout(rng: () => number): DungeonLayout {
     const isBoss = kind === 'boss';
     const isEntrance = kind === 'entrance';
 
-    // Sizes per kind.
+    // Sizes per kind. Ceiling height varies per kind for vertical interest.
+    // Polish target: spawn 4m, transition (mid fight) 6m, savaş 5m, geçit 3m, boss 8m.
     let hx: number, hz: number, height: number;
     if (isBoss) {
       hx = rangeRng(rng, 8, 10);
       hz = rangeRng(rng, 8, 10);
-      height = 5.5;
+      height = 8.0;
     } else if (isEntrance) {
       hx = rangeRng(rng, 4.5, 5.5);
       hz = rangeRng(rng, 4.5, 5.5);
-      height = 3.5;
+      height = 4.0;
     } else {
       hx = rangeRng(rng, 4, 7);
       hz = rangeRng(rng, 4, 7);
-      height = rangeRng(rng, 3.2, 4.0);
+      // Alternate fight rooms: index 1 = high transition, 2 = lower passage, 3 = standard
+      if (i === 1) height = 6.0;
+      else if (i === 2) height = 3.0;
+      else height = 5.0;
     }
 
     // Corridor between previous room and this one.

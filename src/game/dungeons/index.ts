@@ -24,8 +24,9 @@ import { gameState, type GameContext } from '../state';
 import { ARCHETYPE_LIST, type ArchetypeDef } from '../mobs';
 import { MOB_RUNTIME, type MobRuntime } from '../mobs/ai';
 import { generateLayout, type DungeonLayout, type RoomDef } from './layout';
-import { buildDungeonGeometry } from './geometry';
+import { buildDungeonGeometry, tickDungeonGeometry } from './geometry';
 import { buildDungeonLighting, tickTorches, type DungeonLightingRig } from './lighting';
+import { applyDungeonAtmosphere, restoreOpenWorldAtmosphere } from './atmosphere';
 import {
   buildPortal,
   setPortalState,
@@ -210,6 +211,8 @@ function tick(frameCtx: { dt: number; elapsed: number; frame: number }): void {
   // prevents distant torches from flickering visibly through the floor).
   if (gameState.currentZone === 'dungeon') {
     tickTorches(dungeon.lighting, frameCtx.elapsed, frameCtx.dt);
+    // Pulse boss-room floor shader veins.
+    tickDungeonGeometry(dungeon.group, frameCtx.elapsed);
   }
 
   // Proximity-based teleport.
@@ -269,6 +272,9 @@ function changeZone(target: 'open-world' | 'dungeon-1'): void {
     // Spawn dungeon mobs now (per-run).
     spawnDungeonMobs(dungeon, ctxRef);
 
+    // Tint scene fog crimson — restored on exit.
+    applyDungeonAtmosphere(ctxRef.scene);
+
     world.emit('zone:enter', { zone: dungeon.zoneId });
     world.emit('audio:sfx', { id: 'zone-enter' });
   } else if (target === 'open-world' && gameState.currentZone !== 'open-world') {
@@ -285,6 +291,9 @@ function changeZone(target: 'open-world' | 'dungeon-1'): void {
 
     // Cleanup all dungeon-tagged entities (mobs, projectiles, loot, boss).
     cleanupDungeonEntities();
+
+    // Restore open-world fog state.
+    restoreOpenWorldAtmosphere(ctxRef.scene);
 
     world.emit('zone:exit', { zone: dungeon.zoneId });
     world.emit('audio:sfx', { id: 'zone-exit' });

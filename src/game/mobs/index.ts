@@ -1,14 +1,15 @@
 // Wave 1: mob spawning + AI brain (idle/aggro/chase/attack/flee/dead).
-// Visual: primitive composite (capsule torso + sphere head + cylinder arms) per archetype.
+// Wave B polish: each archetype builds a richer Group rig with named child
+// meshes (head/torso/armL/armR/legL/legR/weapon/cape) so mobs/animation.ts can
+// drive a per-archetype walk cycle, attack windup + commit, and hit shake.
+//
+// Hitbox sizes (per archetype) are unchanged from Wave 1 — visuals only.
 //
 // Wave-1 behaviour notes:
-// - HP loss is applied here in response to 'damage:dealt' events whose target is
-//   one of OUR mobs. This is a stub so that we can actually kill mobs while
-//   the dedicated combat module is still being built. Once Wave 2 lands, the
-//   combat module will own damage application — search for `WAVE2_OWNS_DAMAGE`
-//   and remove that block.
-// - Mob-on-player damage events ARE emitted from the AI; whoever wires player
-//   health (Wave 2 combat) is responsible for applying them.
+// - Combat module owns HP application via 'damage:dealt'. We only render the
+//   floating damage number + red flash + queue the hit-shake animation here.
+// - Mob-on-player damage events come from ai.ts -> projectiles.ts; player
+//   health is owned by combat.
 
 import { Vector3 } from 'three';
 import { createEntity, setComponent } from '../../core/entity';
@@ -28,6 +29,14 @@ import type { GameContext } from '../state';
 import { ARCHETYPE_LIST, pickArchetype, type ArchetypeDef, type ArchetypeId } from './archetypes';
 import { mobAISystem, MOB_RUNTIME, type MobRuntime } from './ai';
 import { projectileSystem } from './projectiles';
+import {
+  MOB_ANIM,
+  createMobAnim,
+  mobAnimationSystem,
+  registerHitShake,
+  type MobAnim,
+} from './animation';
+import { resetMobShaderRegistry } from './shaders';
 
 const SPAWN_RING_RADIUS = 100;
 const PLAYER_CLEAR_ZONE = 12;
@@ -35,6 +44,9 @@ const TOTAL_MOBS = 40;
 
 export function initMobs(ctx: GameContext): void {
   const world = ctx.world;
+
+  // Reset shader uniform registry on init (HMR / re-entry safety).
+  resetMobShaderRegistry();
 
   const counts: Record<ArchetypeId, number> = {
     'skeleton-warrior': 0,
@@ -55,8 +67,7 @@ export function initMobs(ctx: GameContext): void {
     counts[arch.id]++;
   }
 
-  // Visual feedback for hits on our mobs. Combat owns HP application — we just
-  // render the floating damage number and red flash here.
+  // Visual feedback for hits on our mobs.
   world.on('damage:dealt', (payload) => {
     const target = world.get(payload.targetId);
     if (!target || !target.tags.has('mob')) return;
@@ -76,8 +87,13 @@ export function initMobs(ctx: GameContext): void {
     flashRed(runtime);
   });
 
-  // Systems
+  // Wave-B: queue per-mob hit shake on damage.
+  registerHitShake(world);
+
+  // Systems — mobAnimationSystem must run AFTER ai.ts (which sets bobPhase
+  // and faces the mob) so we layer limb sway on top of the rig's facing.
   world.addSystem((w, frameCtx) => mobAISystem(w, frameCtx));
+  world.addSystem((w, frameCtx) => mobAnimationSystem(w, frameCtx));
   world.addSystem((w, frameCtx) => projectileSystem(w, frameCtx));
 }
 
@@ -88,7 +104,6 @@ function countTotal(counts: Record<ArchetypeId, number>): number {
 }
 
 function randomSpawnPos(): Vector3 | null {
-  // Reject samples in the clear zone.
   for (let i = 0; i < 6; i++) {
     const r = PLAYER_CLEAR_ZONE + Math.random() * (SPAWN_RING_RADIUS - PLAYER_CLEAR_ZONE);
     const angle = Math.random() * Math.PI * 2;
@@ -142,7 +157,7 @@ function spawnMob(ctx: GameContext, arch: ArchetypeDef, pos: Vector3): Entity {
     leashRadius: 16,
     aggroRadius: arch.aggroRadius,
     attackRange: arch.attackRange,
-    nextThinkTime: Math.random() * 0.1, // stagger initial thinks
+    nextThinkTime: Math.random() * 0.1,
   });
   setComponent<MoveTargetComponent>(entity, C.MoveTarget, {
     target: null,
@@ -168,9 +183,22 @@ function spawnMob(ctx: GameContext, arch: ArchetypeDef, pos: Vector3): Entity {
   };
   setComponent<MobRuntime>(entity, MOB_RUNTIME, runtime);
 
-  // Per-archetype XP reward — combat reads this string-keyed component when
-  // crediting kills via mob:killed.
+  // Wave-B animation runtime — snapshots rest pose of the named child meshes.
+  const anim: MobAnim = createMobAnim(arch.id, rig, arch.animatedParts);
+  // Seed last-position to spawn pos so the first-frame velocity isn't huge.
+  anim.lastX = pos.x;
+  anim.lastZ = pos.z;
+  setComponent<MobAnim>(entity, MOB_ANIM, anim);
+
+  // Per-archetype XP reward — combat reads this when crediting kills.
   entity.components.set('mobXpReward', arch.xpReward);
+
+  // Propagate entityId to every child mesh — input raycast already walks the
+  // parent chain, but stamping every child makes the hit test cheaper and
+  // matches the spec.
+  rig.traverse((child) => {
+    child.userData.entityId = entity.id;
+  });
 
   ctx.world.spawn(entity);
   return entity;

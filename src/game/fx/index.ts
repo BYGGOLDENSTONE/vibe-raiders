@@ -14,6 +14,23 @@ import { createHitStop } from './hitstop';
 import { createParticleSystem } from './particles';
 import { createFloatingText } from './floatingText';
 import { createSkillRingFx } from './skillRing';
+import { createTrailPool, type TrailPool } from './trails';
+import { createDecalSystem, type DecalSystem } from './decals';
+
+// Singleton handles — populated by initFx, read by skills/index.ts via getters.
+// (We don't add new EventMap entries; skills calls these directly.)
+let _trails: TrailPool | null = null;
+let _decals: DecalSystem | null = null;
+
+export function getTrailPool(): TrailPool | null {
+  return _trails;
+}
+export function getDecalSystem(): DecalSystem | null {
+  return _decals;
+}
+
+export type { TrailPool } from './trails';
+export type { DecalSystem } from './decals';
 
 export function initFx(ctx: GameContext): void {
   const { world, scene, camera, uiRoot } = ctx;
@@ -24,6 +41,11 @@ export function initFx(ctx: GameContext): void {
   const particles = createParticleSystem(scene);
   const floating = createFloatingText(uiRoot);
   const rings = createSkillRingFx(scene);
+  const trails = createTrailPool(scene);
+  const decals = createDecalSystem(scene);
+
+  _trails = trails;
+  _decals = decals;
 
   // Composer drives rendering from now on.
   ctx.renderHook = () => post.composer.render();
@@ -121,6 +143,8 @@ export function initFx(ctx: GameContext): void {
     shake.update(realDt, camera);
     particles.update(realDt);
     rings.update(realDt);
+    trails.update(realDt);
+    decals.update(realDt);
     post.update(realDt);
 
     floating.update(realDt, camera, window.innerWidth, window.innerHeight);

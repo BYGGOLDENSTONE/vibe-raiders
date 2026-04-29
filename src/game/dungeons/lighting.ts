@@ -1,10 +1,13 @@
 // Dungeon lighting — flickering torches per room + soft ambient. Adds atmosphere.
 
 import {
+  AdditiveBlending,
   AmbientLight,
+  ConeGeometry,
   CylinderGeometry,
   Group,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   PointLight,
   SphereGeometry,
@@ -15,6 +18,12 @@ import { rangeRng } from './rng';
 export interface TorchRig {
   light: PointLight;
   flameMat: MeshStandardMaterial;
+  // Outer plume — larger emissive cone with billboard-additive blending.
+  plumeMat: MeshBasicMaterial;
+  plumeMesh: Mesh;
+  // Heat-haze placeholder: faint emissive plane that shimmers vertically.
+  heatMat: MeshBasicMaterial;
+  heatMesh: Mesh;
   baseIntensity: number;
   baseEmissive: number;
   flickerPhase: number;
@@ -90,12 +99,18 @@ function pickTorchPositions(room: RoomDef, rng: () => number): TorchSlot[] {
 function buildTorch(rng: () => number): TorchRig {
   const visual = new Group();
 
-  // Bracket.
-  const bracketMat = new MeshStandardMaterial({ color: 0x202020, roughness: 0.6, metalness: 0.4 });
-  const bracket = new Mesh(new CylinderGeometry(0.04, 0.04, 0.5, 6), bracketMat);
+  // Bracket — wider iron sconce.
+  const bracketMat = new MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.6, metalness: 0.5 });
+  const bracket = new Mesh(new CylinderGeometry(0.05, 0.05, 0.5, 8), bracketMat);
   bracket.rotation.z = Math.PI / 2;
   bracket.position.set(0, 0, 0);
   visual.add(bracket);
+
+  // Iron bowl at end (cup that holds flame).
+  const bowlMat = new MeshStandardMaterial({ color: 0x2a1810, roughness: 0.7, metalness: 0.4 });
+  const bowl = new Mesh(new CylinderGeometry(0.13, 0.08, 0.16, 10), bowlMat);
+  bowl.position.set(0.22, 0.15, 0);
+  visual.add(bowl);
 
   // Wood handle.
   const handleMat = new MeshStandardMaterial({ color: 0x3a2010, roughness: 0.95 });
@@ -103,26 +118,67 @@ function buildTorch(rng: () => number): TorchRig {
   handle.position.set(0.18, 0.1, 0);
   visual.add(handle);
 
-  // Flame — emissive sphere.
+  // Inner flame core — bright emissive sphere.
   const flameMat = new MeshStandardMaterial({
-    color: 0xffb060,
+    color: 0xffd078,
     emissive: 0xff7020,
-    emissiveIntensity: 2.4,
-    roughness: 0.4,
+    emissiveIntensity: 3.0,
+    roughness: 0.3,
   });
-  const flame = new Mesh(new SphereGeometry(0.13, 10, 8), flameMat);
-  flame.position.set(0.18, 0.32, 0);
+  const flame = new Mesh(new SphereGeometry(0.16, 10, 8), flameMat);
+  flame.position.set(0.22, 0.36, 0);
   visual.add(flame);
 
-  const baseIntensity = 1.6 + rangeRng(rng, -0.2, 0.2);
-  const light = new PointLight(0xff8040, baseIntensity, 9, 1.7);
+  // Outer plume — taller emissive cone, additive, billboarded by ticking.
+  const plumeMat = new MeshBasicMaterial({
+    color: 0xff8030,
+    transparent: true,
+    opacity: 0.7,
+    blending: AdditiveBlending,
+    depthWrite: false,
+  });
+  const plumeMesh = new Mesh(new ConeGeometry(0.22, 0.8, 10, 1, true), plumeMat);
+  plumeMesh.position.set(0.22, 0.8, 0);
+  visual.add(plumeMesh);
+
+  // Inner brighter plume.
+  const innerPlumeMat = new MeshBasicMaterial({
+    color: 0xffe098,
+    transparent: true,
+    opacity: 0.65,
+    blending: AdditiveBlending,
+    depthWrite: false,
+  });
+  const innerPlume = new Mesh(new ConeGeometry(0.13, 0.55, 8, 1, true), innerPlumeMat);
+  innerPlume.position.set(0.22, 0.66, 0);
+  visual.add(innerPlume);
+
+  // Heat-haze placeholder: faint additive plane above flame.
+  const heatMat = new MeshBasicMaterial({
+    color: 0xffaa66,
+    transparent: true,
+    opacity: 0.18,
+    blending: AdditiveBlending,
+    depthWrite: false,
+  });
+  const heatMesh = new Mesh(new ConeGeometry(0.4, 1.4, 12, 1, true), heatMat);
+  heatMesh.position.set(0.22, 1.4, 0);
+  visual.add(heatMesh);
+
+  const baseIntensity = 2.2 + rangeRng(rng, -0.3, 0.3);
+  const light = new PointLight(0xff8040, baseIntensity, 11, 1.7);
+  light.position.set(0.22, 0.5, 0);
   light.userData.visual = visual;
 
   return {
     light,
     flameMat,
+    plumeMat,
+    plumeMesh,
+    heatMat,
+    heatMesh,
     baseIntensity,
-    baseEmissive: 2.4,
+    baseEmissive: 3.0,
     flickerPhase: rng() * Math.PI * 2,
     flickerSpeed: rangeRng(rng, 5, 10),
   };
@@ -135,7 +191,10 @@ export function tickTorches(rig: DungeonLightingRig, elapsed: number, dt: number
     const j = 1 + noise * 0.18;
     t.light.intensity = t.baseIntensity * j;
     t.flameMat.emissiveIntensity = t.baseEmissive * (0.85 + noise * 0.25);
+    // Plume / haze sway.
+    t.plumeMesh.scale.set(1 + noise * 0.18, 1 + Math.abs(noise) * 0.25, 1 + noise * 0.18);
+    t.plumeMat.opacity = 0.55 + Math.abs(noise) * 0.25;
+    t.heatMesh.rotation.y = elapsed * 0.6 + t.flickerPhase * 0.2;
+    t.heatMat.opacity = 0.12 + Math.abs(noise) * 0.1;
   }
-  // Suppress unused param warning for elapsed (kept for API symmetry).
-  void elapsed;
 }
