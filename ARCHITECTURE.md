@@ -30,13 +30,19 @@ No deep inheritance. No singletons leaking through the codebase. State lives on 
 ```
 src/
 ├── core/          ECS-lite, types, event bus, component/tag enums
-├── world/         Scene, atmosphere cycle, procedural city, shelters, portals
+├── world/         Scene, atmosphere, multi-biome world, heightmap, portals
+│   ├── biomes/    Per-biome generators (city/industrial/dam/forest/mountain)
+│   ├── map.ts     Top-level world orchestrator (generateWorld)
+│   ├── heightmap.ts  Terrain mesh + groundHeight(x,z) sampler
+│   └── ...
 ├── entities/      Factories: createPlayer, createBot, createLoot, ...
-├── systems/       Per-frame logic: fps-controller, combat, ai, loot, extraction
+├── systems/       Per-frame logic: fps-controller, combat, ai, loot, extraction, grapple
 ├── net/           PartyKit client + room schemas + sync
-├── ui/            Debug panel, lobby, HUD, leaderboard, announcements
+├── ui/            Debug panel, lobby, HUD, minimap, leaderboard, announcements
 ├── audio/         Web Audio context + sound bank
-└── main.ts        Bootstrap: build world, register systems, run loop
+├── render/        Post-processing pipeline (composer + passes)
+├── main.ts        Bootstrap: build world, register systems, run loop
+└── partykit/      (sibling to src/) Cloudflare Workers room implementation
 ```
 
 **Rules:**
@@ -67,8 +73,11 @@ Per-biome generators. Each exports a `buildXxxBiome(opts)` that returns `{ colli
 ### `world/portals.ts` (in progress, subagent)
 `createVibeJamPortals({ scene, getPlayer, spawnPoint, exitPosition, hostName })` → `{ update() }`. ESM port of vibej.am sample. Detects `?portal=true`, draws green exit + red arrival, handles redirect logic.
 
-### `systems/fps-controller.ts` → `createFpsController({ camera, domElement, player })`
-Pointer lock + WASD + sprint + crouch + jump + gravity + planar-bounded movement. Will gain AABB collision when city colliders land.
+### `systems/fps-controller.ts` → `createFpsController({ camera, domElement, player, colliders, getGroundHeight })`
+Pointer lock + WASD + sprint + crouch + jump + gravity + planar-bounded movement + AABB collision (via `pushOutXZ`) + heightmap ground sampling (per frame, via the optional `getGroundHeight` callback).
+
+### `render/post.ts` → `createPostPipeline({ renderer, scene, camera })`
+EffectComposer pipeline. Passes: `RenderPass` → `UnrealBloomPass` → custom `ShaderPass` (vignette + chromatic aberration; grain disabled by default) → `OutputPass`. Returns `{ composer, params, render(), resize(w,h), setEnabled(b), isEnabled() }`. `main.ts` calls `post.render()` instead of `renderer.render(scene, camera)`. Toggle with debug key N.
 
 ### `entities/player.ts` → `createLocalPlayer(opts)`
 Factory. Tags: `player`, `localPlayer`, `alive`. Components: transform, health (100), weapon (mag 20 / reserve 40 / dmg 25), backpack (20 kg), player.
@@ -124,11 +133,12 @@ Room → Clients:
 ## Performance budget
 
 - 60 FPS on mid-range laptop (integrated GPU acceptable)
-- Draw distance: 200 m, fog from 80 m baseline (overridden per atmosphere phase)
-- InstancedMesh for repeated geometry (rubble, debris, building blocks)
-- One ambient + ≤ 6 dynamic lights, baked-feel via emissive materials
-- Total payload < 5 MB (no 3D assets — procedural geometry only; small audio samples)
-- Production build: no debug panel (tree-shaken via `import.meta.env.DEV`).
+- Draw distance: 380 m baseline, fog kicks in earlier per atmosphere phase
+- InstancedMesh for repeated geometry (rubble, debris, trees, rocks)
+- ~25 dynamic PointLights total across the world (interior + fires + observatory + shelters)
+- Total payload < 5 MB (currently 154 KB gzipped — no 3D assets, procedural geometry only)
+- Production build: no debug panel (tree-shaken via `import.meta.env.DEV`)
+- Post-processing on by default; can be toggled off per-frame for low-end devices
 
 ## Subagent strategy
 
@@ -138,6 +148,6 @@ Independent modules get spun out as subagents with a clear contract:
 - Constraint: only writes inside its assigned module folder
 - Integration: glue happens in main context after the subagent returns
 
-Used so far for: `world/city.ts`, `world/portals.ts`, `partykit/server.ts` + `net/*`.
+Used so far for: original `world/city.ts`, `world/portals.ts`, `partykit/server.ts` + `net/*`, the full `world/biomes/*` + `world/map.ts` + `world/heightmap.ts` rebuild.
 
-Glue (entry point, lobby, scene wiring, system registration) stays in main context.
+Glue (entry point, lobby, scene wiring, system registration, post-processing wiring) stays in main context.
