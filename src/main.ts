@@ -1,203 +1,64 @@
-import { Clock } from 'three';
+// Sanity-check bootstrap: Three.js + ECS-lite. Renders a rotating cube so we can
+// confirm the renderer, animation loop, and World tick are all wired up.
+// Replace this with the real game entry once the design is locked.
+
+import { BoxGeometry, Clock, Color, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, WebGLRenderer, AmbientLight, DirectionalLight, Object3D, Vector3 } from 'three';
 import { World } from './core/world';
-import { createSceneBundle } from './world/scene';
-import { createAtmosphere, PHASES } from './world/atmosphere';
-import { generateWorld } from './world/map';
-import { createFpsController } from './systems/fps-controller';
-import { createLocalPlayer } from './entities/player';
-import { createDebugPanel, dbgRow, dbgBar } from './ui/debug';
-import { createPostPipeline } from './render/post';
-import { C, type TransformComponent, type HealthComponent, type WeaponComponent, type BackpackComponent } from './core/components';
-import { getComponent } from './core/entity';
+import { createEntity, setComponent } from './core/entity';
+import { C, type TransformComponent } from './core/components';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 const boot = document.getElementById('boot');
 
-const bundle = createSceneBundle(canvas);
-const { renderer, scene, camera } = bundle;
+const renderer = new WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
 
-const post = createPostPipeline({ renderer, scene, camera });
+const scene = new Scene();
+scene.background = new Color(0x101418);
 
-const onResize = () => post.resize(window.innerWidth, window.innerHeight);
-window.addEventListener('resize', onResize);
+const camera = new PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 2, 6);
+camera.lookAt(0, 0, 0);
 
-const atmosphere = createAtmosphere(bundle);
-
-const CITY_SEED = Math.floor(Math.random() * 1_000_000);
-const worldMap = generateWorld({ scene, seed: CITY_SEED });
-
-// Pick a random shelter as the spawn position. Y is sampled from the heightmap.
-const spawnShelter = worldMap.shelters[Math.floor(Math.random() * worldMap.shelters.length)];
-const spawnPos = {
-  x: spawnShelter.position[0],
-  y: worldMap.groundHeight(spawnShelter.position[0], spawnShelter.position[2]),
-  z: spawnShelter.position[2],
-};
+scene.add(new AmbientLight(0xffffff, 0.4));
+const dir = new DirectionalLight(0xffffff, 1.0);
+dir.position.set(5, 10, 7);
+scene.add(dir);
 
 const world = new World(scene);
-const player = createLocalPlayer({ spawn: spawnPos });
-world.spawn(player);
 
-const fps = createFpsController({
-  camera,
-  domElement: canvas,
-  player,
-  colliders: worldMap.colliders,
-  worldHalfSize: 200,
-  getGroundHeight: worldMap.groundHeight,
+const cubeMesh = new Mesh(
+  new BoxGeometry(1, 1, 1),
+  new MeshStandardMaterial({ color: 0x6ea0ff }),
+);
+const cube = createEntity({ object3d: cubeMesh, tags: ['cube'] });
+setComponent<TransformComponent>(cube, C.Transform, { velocity: new Vector3(), grounded: true });
+world.spawn(cube);
+
+world.addSystem((w) => {
+  for (const e of w.query('cube')) {
+    e.object3d.rotation.x += 0.01;
+    e.object3d.rotation.y += 0.013;
+  }
 });
 
-const debug = createDebugPanel({ enabled: import.meta.env.DEV });
-
-let atmosphereTimeScale = 1;
-let atmospherePaused = false;
-
-debug.addKey({
-  key: 'KeyB',
-  label: 'next phase',
-  group: 'atmosphere',
-  fn: () => {
-    let t = atmosphereTimeRef;
-    let cursor = t % atmosphere.totalCycleSec();
-    for (const p of PHASES) {
-      if (cursor < p.durationSec) { t += (p.durationSec - cursor) + 0.001; break; }
-      cursor -= p.durationSec;
-    }
-    atmosphere.setTime(t);
-    atmosphereTimeRef = t;
-  },
-});
-debug.addKey({ key: 'KeyP', label: 'pause cycle', group: 'atmosphere', fn: () => { atmospherePaused = !atmospherePaused; } });
-debug.addKey({ key: 'BracketLeft', label: 'slow ÷2', group: 'atmosphere', fn: () => { atmosphereTimeScale = Math.max(0.125, atmosphereTimeScale / 2); } });
-debug.addKey({ key: 'BracketRight', label: 'fast ×2', group: 'atmosphere', fn: () => { atmosphereTimeScale = Math.min(64, atmosphereTimeScale * 2); } });
-debug.addKey({ key: 'KeyR', label: 'reset cycle', group: 'atmosphere', fn: () => { atmosphere.setTime(0); atmosphereTimeRef = 0; atmosphereTimeScale = 1; atmospherePaused = false; } });
-
-debug.addKey({
-  key: 'KeyN',
-  label: 'toggle post-fx',
-  group: 'render',
-  fn: () => { post.setEnabled(!post.isEnabled()); },
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-debug.addKey({
-  key: 'KeyT',
-  label: 'tp to next shelter',
-  group: 'world',
-  fn: () => {
-    const idx = (worldMap.shelters.findIndex(s => Math.abs(s.position[0] - player.object3d.position.x) < 5 && Math.abs(s.position[2] - player.object3d.position.z) < 5) + 1) % worldMap.shelters.length;
-    const s = worldMap.shelters[idx];
-    player.object3d.position.set(s.position[0], worldMap.groundHeight(s.position[0], s.position[2]), s.position[2]);
-    const t = getComponent<TransformComponent>(player, C.Transform);
-    if (t) t.velocity.set(0, 0, 0);
-  },
-});
-
-let atmosphereTimeRef = 0;
-
-let fpsAccum = 0; let fpsFrames = 0; let fpsValue = 0;
-
-debug.addSection({
-  id: 'perf',
-  title: 'PERF',
-  order: 0,
-  render: () => {
-    const ms = fpsValue > 0 ? (1000 / fpsValue).toFixed(1) : '—';
-    return dbgRow('fps', fpsValue.toFixed(0)) + dbgRow('ms', ms);
-  },
-});
-
-debug.addSection({
-  id: 'atmosphere',
-  title: 'ATMOSPHERE',
-  order: 1,
-  render: () => {
-    const total = atmosphere.totalCycleSec();
-    const cursor = atmosphereTimeRef % total;
-    let phaseIdx = 0; let phaseStart = 0; let acc = 0;
-    for (let i = 0; i < PHASES.length; i++) {
-      if (cursor < acc + PHASES[i].durationSec) { phaseIdx = i; phaseStart = acc; break; }
-      acc += PHASES[i].durationSec;
-    }
-    const phase = PHASES[phaseIdx];
-    const into = cursor - phaseStart;
-    const remaining = phase.durationSec - into;
-    return (
-      dbgRow('phase', phase.name) +
-      dbgRow('next in', `${remaining.toFixed(0)}s`) +
-      dbgBar(into / phase.durationSec) +
-      dbgRow('scale', atmospherePaused ? 'PAUSED' : `${atmosphereTimeScale}×`)
-    );
-  },
-});
-
-debug.addSection({
-  id: 'player',
-  title: 'PLAYER',
-  order: 2,
-  render: () => {
-    const t = getComponent<TransformComponent>(player, C.Transform);
-    const h = getComponent<HealthComponent>(player, C.Health);
-    const w = getComponent<WeaponComponent>(player, C.Weapon);
-    const b = getComponent<BackpackComponent>(player, C.Backpack);
-    const p = player.object3d.position;
-    return (
-      dbgRow('xyz', `${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)}`) +
-      dbgRow('vel', t ? `${t.velocity.length().toFixed(1)} m/s` : '—') +
-      dbgRow('grounded', t ? (t.grounded ? 'yes' : 'no') : '—') +
-      dbgRow('hp', h ? `${h.current}/${h.max}` : '—') +
-      dbgRow('ammo', w ? `${w.magazine}/${w.reserve}` : '—') +
-      dbgRow('bag', b ? `${b.weightKg.toFixed(1)}/${b.capacityKg}kg` : '—')
-    );
-  },
-});
-
-debug.addSection({
-  id: 'world',
-  title: 'WORLD',
-  order: 3,
-  render: () => {
-    return (
-      dbgRow('seed', String(CITY_SEED)) +
-      dbgRow('shelters', String(worldMap.shelters.length)) +
-      dbgRow('colliders', String(worldMap.colliders.length)) +
-      dbgRow('landmarks', String(worldMap.landmarks.length))
-    );
-  },
-});
-
-debug.setStatus('dev');
-
-boot?.addEventListener('click', () => { fps.requestLock(); });
-
-const onLockChange = () => {
-  if (!boot) return;
-  boot.style.display = document.pointerLockElement === canvas ? 'none' : 'flex';
-};
-document.addEventListener('pointerlockchange', onLockChange);
+if (boot) boot.style.display = 'none';
 
 const clock = new Clock();
-let elapsed = 0;
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);
-  elapsed += dt;
-
-  if (!atmospherePaused) {
-    const scaled = dt * atmosphereTimeScale;
-    atmosphere.update(scaled);
-    atmosphereTimeRef += scaled;
-  }
-
-  worldMap.update?.(elapsed);
-
-  fps.update(dt);
   world.tick(dt);
-  post.render();
-
-  fpsAccum += dt; fpsFrames++;
-  if (fpsAccum >= 0.5) { fpsValue = fpsFrames / fpsAccum; fpsAccum = 0; fpsFrames = 0; }
-
-  debug.update(dt);
-
+  renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
 loop();
+
+// Touch unused import so erasable-syntax-only tsconfig stays happy if Object3D ever drops out.
+void Object3D;
