@@ -3,10 +3,10 @@
 export const GAME_NAME = 'DUSK';
 
 export const COLORS = {
-  bgFog: 0x0a0a0d,
-  ambient: 0x4a3a55,
-  moonlight: 0x8088b0,
-  ground: 0x1a1820,
+  bgFog: 0x1a1825,
+  ambient: 0x9a8ab0,
+  moonlight: 0xc0c8e8,
+  ground: 0x4a4350,
   player: 0xc8a060,
   hostile: 0xa03030,
   boss: 0xff5020,

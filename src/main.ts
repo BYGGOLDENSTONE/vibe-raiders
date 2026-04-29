@@ -19,6 +19,7 @@ import { initDungeons } from './game/dungeons';
 import { initBoss } from './game/boss';
 import { initPortal } from './game/portal';
 import { initMultiplayer } from './multiplayer';
+import { initMenu } from './game/menu';
 import { COLORS } from './game/constants';
 import { gameState, type GameContext } from './game/state';
 
@@ -56,6 +57,7 @@ initDungeons(ctx);
 initBoss(ctx);
 initPortal(ctx);
 initMultiplayer(ctx);
+initMenu(ctx);
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;

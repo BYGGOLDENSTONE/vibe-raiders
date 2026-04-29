@@ -28,7 +28,7 @@ function buildGraph(): AudioGraph {
   compressor.release.setValueAtTime(0.18, ctx.currentTime);
 
   const master = ctx.createGain();
-  master.gain.value = 0.6;
+  master.gain.value = 0.25;
 
   const sfxBus = ctx.createGain();
   sfxBus.gain.value = 1.0;

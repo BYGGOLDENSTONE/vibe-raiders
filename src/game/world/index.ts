@@ -21,8 +21,8 @@ import { buildStarfield, buildMoon } from './sky';
 export function initWorld(ctx: GameContext): void {
   const { scene, world, camera } = ctx;
 
-  // Tighter fog feels more oppressive. Slightly cooler hue.
-  scene.fog = new FogExp2(COLORS.bgFog, 0.018);
+  // Light atmospheric fog — D4-style: dark setting, but everything reads clearly.
+  scene.fog = new FogExp2(COLORS.bgFog, 0.0035);
 
   // Terrain.
   const terrain = buildTerrain();
@@ -46,15 +46,15 @@ export function initWorld(ctx: GameContext): void {
   const moon = buildMoon(world, camera);
   scene.add(moon);
 
-  // Lighting.
-  const ambient = new AmbientLight(COLORS.ambient, 0.55);
+  // Lighting — D4 brightness target: dark mood but every surface clearly readable.
+  const ambient = new AmbientLight(COLORS.ambient, 1.6);
   scene.add(ambient);
 
-  const moonLight = new DirectionalLight(COLORS.moonlight, 0.65);
+  const moonLight = new DirectionalLight(COLORS.moonlight, 2.0);
   moonLight.position.set(50, 80, 30);
   moonLight.name = 'moon-directional';
   scene.add(moonLight);
 
-  const hemi = new HemisphereLight(0x6066a0, 0x1a1820, 0.35);
+  const hemi = new HemisphereLight(0x9aa0d0, 0x4a4555, 1.3);
   scene.add(hemi);
 }

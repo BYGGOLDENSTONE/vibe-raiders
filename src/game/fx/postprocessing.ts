@@ -12,9 +12,9 @@ import type { GameContext } from '../state';
 const VignetteGradeShader = {
   uniforms: {
     tDiffuse: { value: null },
-    uVignetteStrength: { value: 0.55 },
-    uVignetteSoft: { value: 0.45 },
-    uCoolTint: { value: new Vector2(0.92, 1.04) }, // r-mul, b-mul (g implicit 1.0)
+    uVignetteStrength: { value: 0.22 },
+    uVignetteSoft: { value: 0.55 },
+    uCoolTint: { value: new Vector2(0.98, 1.02) }, // r-mul, b-mul (g implicit 1.0)
     uDarkFlash: { value: 0.0 }, // 0..1 darken the screen (player death cue)
     uBrightFlash: { value: 0.0 }, // 0..1 lift toward white (level-up cue)
   },

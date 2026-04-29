@@ -36,9 +36,11 @@ export function buildTerrain(): Terrain {
   const pos = geom.attributes.position as BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
 
-  const valley = new Color(0x0d0c14);
-  const mid = new Color(COLORS.ground);
-  const peak = new Color(0x2a2030);
+  // D4-bright terrain palette — dark mauve/grey but clearly readable, no black holes.
+  const valley = new Color(0x4a4055);
+  const mid = new Color(0x6a5d70);
+  const peak = new Color(0x8a7588);
+  void COLORS;
 
   let minH = Infinity;
   let maxH = -Infinity;
