@@ -47,6 +47,14 @@ export interface EventMap {
   'player:moveCommand': { entityId: number; targetX: number; targetZ: number };
   'player:basicAttack': { entityId: number; targetId: number };
   'player:skillCast': { entityId: number; slotIndex: number; targetX: number; targetZ: number };
+  'player:engageEnemy': { entityId: number; targetId: number };
+  'player:pickupTarget': { entityId: number; lootEntityId: number };
+  'player:classChanged': { classId: 'rogue' | 'barbarian' | 'sorcerer' };
+
+  // Progression rewards
+  'skill:unlocked': { entityId: number; slotIndex: number };
+  'skillpoint:gained': { entityId: number; total: number };
+  'skillpoint:spent': { entityId: number; slotIndex: number; remaining: number };
 
   // FX cues (any system can request visual feedback)
   'fx:hitstop': { duration: number };

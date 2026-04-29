@@ -57,7 +57,38 @@ export function initLoot(ctx: GameContext): void {
     handleMobDeath(ctx, ent);
   });
 
-  // Pickup loop — runs every tick.
+  // Track the player's current pickup intent (set by input on click). The
+  // proximity loop below treats it as a priority — pick up the targeted drop
+  // as soon as the player is within range, even if another drop is closer
+  // (D4 click-on-loot behavior). Plain proximity still works as a fallback so
+  // walking over a pile keeps grabbing items.
+  let pickupIntentId: number | null = null;
+  world.on('player:pickupTarget', (payload) => {
+    pickupIntentId = payload.lootEntityId;
+  });
+
+  // Helper: try to pick up a single drop. Returns true if consumed.
+  function tryPickup(drop: Entity, player: Entity, inventory: InventoryComponent): boolean {
+    const lootComp = getComponent<LootDropComponent>(drop, C.LootDrop);
+    if (!lootComp) return false;
+    if (inventory.items.length >= inventory.capacity) return false;
+
+    inventory.items.push(lootComp.item);
+    const dropPos = drop.object3d.position;
+    world.emit('item:picked', { pickerId: player.id, itemId: lootComp.item.id });
+    world.emit('fx:floatingText', {
+      x: dropPos.x,
+      y: dropPos.y + 1.0,
+      z: dropPos.z,
+      text: lootComp.item.name,
+      color: lootComp.item.iconColor,
+    });
+    world.emit('audio:sfx', { id: 'item-pickup', x: dropPos.x, z: dropPos.z });
+    world.despawn(drop.id);
+    return true;
+  }
+
+  // Pickup loop — runs every tick. Intent-priority + proximity fallback.
   world.addSystem((w) => {
     const player = gameState.player;
     if (!player || !player.alive) return;
@@ -68,31 +99,29 @@ export function initLoot(ctx: GameContext): void {
     const px = player.object3d.position.x;
     const pz = player.object3d.position.z;
 
+    // 1) Intent priority: if the player clicked a specific drop, grab THAT one
+    //    the moment they're in range. Clear the intent if the drop went away.
+    if (pickupIntentId !== null) {
+      const target = w.get(pickupIntentId);
+      if (!target || !target.alive || !target.tags.has('loot')) {
+        pickupIntentId = null;
+      } else {
+        const dx = target.object3d.position.x - px;
+        const dz = target.object3d.position.z - pz;
+        if (dx * dx + dz * dz <= radiusSq) {
+          if (tryPickup(target, player, inventory)) {
+            pickupIntentId = null;
+          }
+        }
+      }
+    }
+
+    // 2) Proximity fallback: any other drop within radius gets grabbed too.
     for (const drop of w.query('loot')) {
       const dx = drop.object3d.position.x - px;
       const dz = drop.object3d.position.z - pz;
       if (dx * dx + dz * dz > radiusSq) continue;
-
-      const lootComp = getComponent<LootDropComponent>(drop, C.LootDrop);
-      if (!lootComp) continue;
-
-      // Inventory full? Skip — leave on ground.
-      if (inventory.items.length >= inventory.capacity) continue;
-
-      inventory.items.push(lootComp.item);
-
-      const dropPos = drop.object3d.position;
-      w.emit('item:picked', { pickerId: player.id, itemId: lootComp.item.id });
-      w.emit('fx:floatingText', {
-        x: dropPos.x,
-        y: dropPos.y + 1.0,
-        z: dropPos.z,
-        text: lootComp.item.name,
-        color: lootComp.item.iconColor,
-      });
-      w.emit('audio:sfx', { id: 'item-pickup', x: dropPos.x, z: dropPos.z });
-
-      w.despawn(drop.id);
+      tryPickup(drop, player, inventory);
     }
   });
 

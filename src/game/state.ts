@@ -14,6 +14,7 @@ export interface GameContext {
 }
 
 export type ZoneKind = 'open-world' | 'dungeon' | 'hub';
+export type SelectableClass = 'rogue' | 'barbarian' | 'sorcerer';
 
 export interface GameState {
   player: Entity | null;
@@ -23,6 +24,8 @@ export interface GameState {
   paused: boolean;
   // FX/combat mutate this during hit-stop. main.ts multiplies dt by it before world.tick.
   timeScale: number;
+  // Class chosen on the start menu. initPlayer reads this; menu emits 'player:classChanged' on PLAY.
+  selectedClass: SelectableClass;
 }
 
 export const gameState: GameState = {
@@ -32,4 +35,9 @@ export const gameState: GameState = {
   partyMemberIds: [],
   paused: false,
   timeScale: 1,
+  selectedClass: 'rogue',
 };
+
+export function setClass(classId: SelectableClass): void {
+  gameState.selectedClass = classId;
+}

@@ -19,6 +19,7 @@ import {
   type HealthComponent,
   type PlayerComponent,
   type ResourceComponent,
+  type SkillUserComponent,
   type StatusEffect,
   type StatusEffectsComponent,
   type MoveTargetComponent,
@@ -26,6 +27,12 @@ import {
 } from '../../core/components';
 import { TUNING } from '../constants';
 import { gameState, type GameContext } from '../state';
+import {
+  defaultSkillRanks,
+  defaultUnlockedSlots,
+  getCasterRankDamageMult,
+  slotUnlockLevel,
+} from '../skills';
 
 // Convention key for archetype-provided XP reward override (string-keyed component).
 const MOB_XP_REWARD_KEY = 'mobXpReward';
@@ -82,7 +89,16 @@ export function initCombat(ctx: GameContext): void {
     // Invuln frames (player only — mobs don't use them).
     if (target.tags.has('player') && health.invulnUntil > now) return;
 
-    const amount = payload.amount;
+    // Skill-rank damage scaling: outgoing damage from the player is scaled by
+    // the rank multiplier of the most recently cast skill. Projectiles fire
+    // their own damage:dealt later but the caster-side flag persists, so they
+    // inherit the right scale for the cast that produced them.
+    let amountIn = payload.amount;
+    const playerEnt = gameState.player;
+    if (playerEnt && payload.sourceId === playerEnt.id && !target.tags.has('player')) {
+      amountIn *= getCasterRankDamageMult(playerEnt);
+    }
+    const amount = amountIn;
     health.hp = Math.max(0, health.hp - amount);
     health.lastHitTime = now;
 
@@ -137,6 +153,30 @@ export function initCombat(ctx: GameContext): void {
       if (hp) hp.hp = hp.maxHp;
       const res = player.components.get(C.Resource) as ResourceComponent | undefined;
       if (res) res.current = res.max;
+
+      // ----- Progression rewards -----
+      const su = player.components.get(C.SkillUser) as SkillUserComponent | undefined;
+      if (su) {
+        if (!su.unlockedSlots || su.unlockedSlots.length !== 6) {
+          su.unlockedSlots = defaultUnlockedSlots();
+        }
+        if (!su.skillRanks || su.skillRanks.length !== 6) {
+          su.skillRanks = defaultSkillRanks();
+        }
+        if (typeof su.skillPoints !== 'number') su.skillPoints = 0;
+
+        // +1 skill point per level (D4-style).
+        su.skillPoints += 1;
+        world.emit('skillpoint:gained', { entityId: player.id, total: su.skillPoints });
+
+        // Auto-unlock slots that gate at this level.
+        for (let i = 1; i <= 4; i++) {
+          if (su.unlockedSlots[i] !== true && pc.level >= slotUnlockLevel(i)) {
+            su.unlockedSlots[i] = true;
+            world.emit('skill:unlocked', { entityId: player.id, slotIndex: i });
+          }
+        }
+      }
 
       world.emit('level:up', { entityId: player.id, newLevel: pc.level });
     }

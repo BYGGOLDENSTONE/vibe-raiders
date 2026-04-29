@@ -69,6 +69,13 @@ export interface SkillSlot {
 export interface SkillUserComponent {
   // slots[0]=basic, [1-3]=actives, [4]=ult, [5]=dash
   slots: SkillSlot[];
+  // Progression: which slots the player has unlocked. Default: basic + dash open.
+  // Index aligns with `slots`. Filled by the skills module on init/respawn.
+  unlockedSlots: boolean[];
+  // Current rank per slot (0 = base, max 5). Damage / cooldown scale off this.
+  skillRanks: number[];
+  // Unspent skill points the player can spend by right-clicking a hotbar slot.
+  skillPoints: number;
 }
 
 export interface HitboxComponent {

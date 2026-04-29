@@ -1,7 +1,8 @@
 // Start menu overlay: pauses the world via gameState.timeScale = 0 until the
-// player clicks PLAY. Includes a how-to-play hint and a master-volume slider.
+// player clicks PLAY. Includes a how-to-play hint, a class selector, and a
+// master-volume slider.
 
-import { gameState, type GameContext } from '../state';
+import { gameState, setClass, type GameContext, type SelectableClass } from '../state';
 import { setMasterVolume } from '../audio/context';
 
 const STYLE_ID = 'dusk-menu-styles';
@@ -40,7 +41,7 @@ const CSS = `
     0 30px 80px rgba(0,0,0,0.85),
     inset 0 1px 0 rgba(200, 160, 96, 0.25);
   min-width: 380px;
-  max-width: 480px;
+  max-width: 760px;
 }
 .dusk-menu-title {
   font-family: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
@@ -67,11 +68,96 @@ const CSS = `
   max-width: 380px;
 }
 .dusk-menu-hint b { color: #c8a060; font-weight: 600; }
+
+.dusk-class-heading {
+  font-family: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
+  font-size: 13px;
+  letter-spacing: 0.42em;
+  color: #c8a060;
+  text-transform: uppercase;
+  margin: 4px 0 -4px 0;
+}
+.dusk-class-row {
+  display: flex;
+  gap: 18px;
+  align-items: stretch;
+  justify-content: center;
+}
+.dusk-class-card {
+  width: 200px;
+  height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 14px 16px 14px;
+  border: 1px solid rgba(120, 100, 80, 0.4);
+  border-radius: 4px;
+  background:
+    linear-gradient(180deg, rgba(28, 22, 30, 0.94), rgba(12, 10, 14, 0.98));
+  box-shadow: 0 4px 14px rgba(0,0,0,0.55), inset 0 1px 0 rgba(200,160,96,0.08);
+  cursor: pointer;
+  transition: transform 120ms ease-out, border-color 160ms ease-out, box-shadow 160ms ease-out;
+}
+.dusk-class-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(200, 160, 96, 0.6);
+}
+.dusk-class-card.selected {
+  border-color: #d8b070;
+  box-shadow:
+    0 0 0 1px #d8b070,
+    0 0 22px var(--accent, rgba(200, 160, 96, 0.55)),
+    0 6px 18px rgba(0,0,0,0.6),
+    inset 0 1px 0 rgba(255,240,200,0.15);
+  transform: translateY(-2px);
+}
+.dusk-class-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
+  font-size: 28px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 0 rgba(0,0,0,0.7), 0 0 10px var(--accent, transparent);
+  border: 1px solid rgba(255,255,255,0.18);
+  background: radial-gradient(circle at 32% 28%, rgba(255,255,255,0.18), rgba(0,0,0,0.35) 70%), var(--accent, #555);
+  box-shadow: 0 0 18px var(--accent, transparent), inset 0 0 12px rgba(0,0,0,0.4);
+  margin-top: 4px;
+}
+.dusk-class-name {
+  font-family: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
+  font-size: 17px;
+  letter-spacing: 0.28em;
+  color: #e8d8b0;
+  text-transform: uppercase;
+}
+.dusk-class-resource {
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--accent, #c8a060);
+  font-weight: 700;
+}
+.dusk-class-desc {
+  font-size: 11px;
+  line-height: 1.55;
+  color: #a8a0a8;
+  text-align: center;
+  letter-spacing: 0.02em;
+  margin-top: 2px;
+}
+
 .dusk-menu-row {
   display: flex;
   align-items: center;
   gap: 12px;
   width: 100%;
+  max-width: 380px;
   font-size: 11px;
   letter-spacing: 0.18em;
   color: #8a8088;
@@ -115,6 +201,42 @@ const CSS = `
 .dusk-menu-play:active { transform: translateY(0); }
 `;
 
+interface ClassMeta {
+  id: SelectableClass;
+  name: string;
+  letter: string;
+  resource: string;
+  accent: string; // hex
+  desc: string;
+}
+
+const CLASSES: ClassMeta[] = [
+  {
+    id: 'rogue',
+    name: 'Rogue',
+    letter: 'R',
+    resource: 'Energy',
+    accent: '#5fc06a',
+    desc: 'Strike from the shadows. Blades, smoke, and the storm.',
+  },
+  {
+    id: 'barbarian',
+    name: 'Barbarian',
+    letter: 'B',
+    resource: 'Rage',
+    accent: '#e07a30',
+    desc: 'Cleave, leap, and whirlwind through the unworthy.',
+  },
+  {
+    id: 'sorcerer',
+    name: 'Sorcerer',
+    letter: 'S',
+    resource: 'Mana',
+    accent: '#5aa8ff',
+    desc: 'Bolt, ice, lightning. Bend the storm to your will.',
+  },
+];
+
 function injectStyles(): void {
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement('style');
@@ -123,7 +245,7 @@ function injectStyles(): void {
   document.head.appendChild(style);
 }
 
-export function initMenu(_ctx: GameContext): void {
+export function initMenu(ctx: GameContext): void {
   injectStyles();
 
   // Freeze the world while the menu is up.
@@ -132,6 +254,7 @@ export function initMenu(_ctx: GameContext): void {
 
   const overlay = document.createElement('div');
   overlay.className = 'dusk-menu-overlay';
+  overlay.setAttribute('data-ui', '');
 
   const card = document.createElement('div');
   card.className = 'dusk-menu-card';
@@ -146,11 +269,67 @@ export function initMenu(_ctx: GameContext): void {
   sub.textContent = 'an arpg ritual';
   card.appendChild(sub);
 
+  // Class selector
+  const heading = document.createElement('div');
+  heading.className = 'dusk-class-heading';
+  heading.textContent = 'choose your class';
+  card.appendChild(heading);
+
+  const row = document.createElement('div');
+  row.className = 'dusk-class-row';
+
+  const cardEls: Record<SelectableClass, HTMLDivElement> = {} as Record<SelectableClass, HTMLDivElement>;
+
+  for (const meta of CLASSES) {
+    const el = document.createElement('div');
+    el.className = 'dusk-class-card';
+    el.style.setProperty('--accent', meta.accent);
+    el.setAttribute('data-class', meta.id);
+
+    const icon = document.createElement('div');
+    icon.className = 'dusk-class-icon';
+    icon.textContent = meta.letter;
+    el.appendChild(icon);
+
+    const name = document.createElement('div');
+    name.className = 'dusk-class-name';
+    name.textContent = meta.name;
+    el.appendChild(name);
+
+    const res = document.createElement('div');
+    res.className = 'dusk-class-resource';
+    res.textContent = meta.resource;
+    el.appendChild(res);
+
+    const desc = document.createElement('div');
+    desc.className = 'dusk-class-desc';
+    desc.textContent = meta.desc;
+    el.appendChild(desc);
+
+    el.addEventListener('click', () => {
+      setClass(meta.id);
+      refreshSelection();
+    });
+
+    cardEls[meta.id] = el;
+    row.appendChild(el);
+  }
+  card.appendChild(row);
+
+  function refreshSelection(): void {
+    for (const meta of CLASSES) {
+      const el = cardEls[meta.id];
+      if (meta.id === gameState.selectedClass) el.classList.add('selected');
+      else el.classList.remove('selected');
+    }
+  }
+  refreshSelection();
+
   const hint = document.createElement('div');
   hint.className = 'dusk-menu-hint';
   hint.innerHTML = [
-    '<b>LMB</b> to move · <b>1</b> <b>2</b> <b>3</b> skills · <b>Q</b> ultimate · <b>SHIFT</b> dash',
-    '<b>I</b> inventory · walk into the <b>ABYSSAL CRYPT</b> to enter the dungeon',
+    '<b>LMB</b> to move &middot; <b>1</b> <b>2</b> <b>3</b> skills &middot; <b>Q</b> ultimate &middot; <b>SHIFT</b> dash',
+    '<b>I</b> inventory &middot; walk into the <b>ABYSSAL CRYPT</b> to enter the dungeon',
     'find the <b>VIBE JAM</b> arch to leap to other jam games',
   ].join('<br>');
   card.appendChild(hint);
@@ -183,6 +362,10 @@ export function initMenu(_ctx: GameContext): void {
   play.className = 'dusk-menu-play';
   play.textContent = 'play';
   play.addEventListener('click', () => {
+    // Push the chosen class through the event bus so player + skills modules
+    // sync color, resource kind, and hotbar slots before the world unpauses.
+    ctx.world.emit('player:classChanged', { classId: gameState.selectedClass });
+
     gameState.timeScale = 1;
     gameState.paused = false;
     overlay.classList.add('closing');
