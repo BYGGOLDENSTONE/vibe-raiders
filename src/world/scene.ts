@@ -23,13 +23,16 @@ export interface SceneBundle {
   scene: Scene;
   camera: PerspectiveCamera;
   sun: DirectionalLight;
+  hemi: HemisphereLight;
+  fog: Fog;
+  skyUniforms: {
+    uHorizon: { value: Vector3 };
+    uZenith: { value: Vector3 };
+    uSunGlow: { value: Vector3 };
+    uSunGlowStrength: { value: number };
+  };
   resize: () => void;
 }
-
-const AMBER_HORIZON = new Color(0xff8a3c);
-const AMBER_ZENITH = new Color(0x2d1a3a);
-const SUN_COLOR = new Color(0xffd28a);
-const FOG_COLOR = new Color(0xb8723a);
 
 export function createSceneBundle(canvas: HTMLCanvasElement): SceneBundle {
   const renderer = new WebGLRenderer({
@@ -40,21 +43,22 @@ export function createSceneBundle(canvas: HTMLCanvasElement): SceneBundle {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   renderer.toneMapping = ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  renderer.toneMappingExposure = 1.25;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = PCFSoftShadowMap;
 
   const scene = new Scene();
   scene.background = new Color(0x1a0e06);
-  scene.fog = new Fog(FOG_COLOR.getHex(), 40, 220);
+  const fog = new Fog(0xb8723a, 40, 220);
+  scene.fog = fog;
 
   const camera = new PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 600);
   camera.position.set(0, 1.7, 0);
 
-  const hemi = new HemisphereLight(AMBER_HORIZON.getHex(), 0x1a1428, 0.5);
+  const hemi = new HemisphereLight(0xff8a3c, 0x4a3850, 0.95);
   scene.add(hemi);
 
-  const sun = new DirectionalLight(SUN_COLOR.getHex(), 1.4);
+  const sun = new DirectionalLight(0xffd28a, 1.6);
   sun.position.set(-60, 40, -30);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
@@ -67,7 +71,9 @@ export function createSceneBundle(canvas: HTMLCanvasElement): SceneBundle {
   sun.shadow.bias = -0.0005;
   scene.add(sun);
 
-  scene.add(makeSky());
+  const { mesh: sky, uniforms: skyUniforms } = makeSky();
+  scene.add(sky);
+
   scene.add(makeGround());
 
   for (let i = 0; i < 12; i++) {
@@ -94,7 +100,7 @@ export function createSceneBundle(canvas: HTMLCanvasElement): SceneBundle {
   };
   window.addEventListener('resize', resize);
 
-  return { renderer, scene, camera, sun, resize };
+  return { renderer, scene, camera, sun, hemi, fog, skyUniforms, resize };
 }
 
 function makeGround(): Mesh {
@@ -110,15 +116,21 @@ function makeGround(): Mesh {
   return m;
 }
 
-function makeSky(): Mesh {
+function makeSky(): { mesh: Mesh; uniforms: SceneBundle['skyUniforms'] } {
   const geom = new SphereGeometry(400, 32, 16);
+  const horizonCol = new Color(0xff8a3c);
+  const zenithCol = new Color(0x2d1a3a);
+  const glowCol = new Color(0xff8c33);
+  const uniforms = {
+    uHorizon: { value: new Vector3(horizonCol.r, horizonCol.g, horizonCol.b) },
+    uZenith: { value: new Vector3(zenithCol.r, zenithCol.g, zenithCol.b) },
+    uSunGlow: { value: new Vector3(glowCol.r, glowCol.g, glowCol.b) },
+    uSunGlowStrength: { value: 0.35 },
+  };
   const mat = new ShaderMaterial({
     side: BackSide,
     depthWrite: false,
-    uniforms: {
-      uHorizon: { value: new Vector3(AMBER_HORIZON.r, AMBER_HORIZON.g, AMBER_HORIZON.b) },
-      uZenith: { value: new Vector3(AMBER_ZENITH.r, AMBER_ZENITH.g, AMBER_ZENITH.b) },
-    },
+    uniforms,
     vertexShader: `
       varying vec3 vWorldDir;
       void main() {
@@ -129,17 +141,18 @@ function makeSky(): Mesh {
     fragmentShader: `
       uniform vec3 uHorizon;
       uniform vec3 uZenith;
+      uniform vec3 uSunGlow;
+      uniform float uSunGlowStrength;
       varying vec3 vWorldDir;
       void main() {
         float t = clamp(vWorldDir.y * 0.5 + 0.5, 0.0, 1.0);
         t = pow(t, 0.6);
         vec3 col = mix(uHorizon, uZenith, t);
-        // sun glow at low angles
         float glow = smoothstep(-0.05, 0.4, vWorldDir.y) * smoothstep(0.6, -0.1, vWorldDir.y);
-        col += vec3(1.0, 0.55, 0.2) * glow * 0.35;
+        col += uSunGlow * glow * uSunGlowStrength;
         gl_FragColor = vec4(col, 1.0);
       }
     `,
   });
-  return new Mesh(geom, mat);
+  return { mesh: new Mesh(geom, mat), uniforms };
 }

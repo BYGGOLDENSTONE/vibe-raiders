@@ -30,36 +30,60 @@ No deep inheritance. No singletons leaking through the codebase. State lives on 
 ```
 src/
 ├── core/          ECS-lite, types, event bus, component/tag enums
-├── world/         Procedural city, shelters, lighting, sky, fog, portals
+├── world/         Scene, atmosphere cycle, procedural city, shelters, portals
 ├── entities/      Factories: createPlayer, createBot, createLoot, ...
-├── systems/       Per-frame logic: movement, combat, ai, loot, extraction
+├── systems/       Per-frame logic: fps-controller, combat, ai, loot, extraction
 ├── net/           PartyKit client + room schemas + sync
-├── ui/            Lobby, HUD, leaderboard, announcements (DOM/CSS)
+├── ui/            Debug panel, lobby, HUD, leaderboard, announcements
 ├── audio/         Web Audio context + sound bank
 └── main.ts        Bootstrap: build world, register systems, run loop
 ```
 
 **Rules:**
 - `core/` knows about nothing else.
-- `entities/` builds Three.js meshes + attaches components, returns an `Entity`. Pure factories — they don't subscribe to events.
-- `systems/` only touch entities through `World.query` and `World.emit`. They don't reach into other systems.
-- `ui/` reacts to events from `World`. UI never mutates game state directly — it sends intents through events.
+- `world/` modules build / mutate the scene; they don't subscribe to gameplay events.
+- `entities/` are pure factories — build mesh + components, return Entity. No subscriptions.
+- `systems/` only touch entities through `World.query` and `World.emit`. They don't import each other.
+- `ui/` reacts to events; it never mutates game state directly. It sends intents through events.
 - `net/` translates between local entities and remote messages. It owns `netId`s.
+
+## Module APIs (current)
+
+### `world/scene.ts` → `createSceneBundle(canvas)`
+Returns `{ renderer, scene, camera, sun, hemi, fog, skyUniforms, resize }`. The bundle exposes the raw uniforms/lights so the atmosphere system can mutate them.
+
+### `world/atmosphere.ts` → `createAtmosphere(bundle)`
+4-phase color cycle. Tween skies, sun, hemi, fog, exposure, and clear color smoothly. Phases (`PHASES`): GOLDEN HOUR · DUST STORM · ASHEN HAZE · BLOOD VEIL. 75 s each, 5 min total. Returns `{ update(dt), currentPhaseName(), setTime(s), totalCycleSec() }`.
+
+### `world/city.ts` (in progress, subagent)
+`generateCity({ scene, seed, opts? })` → `{ colliders, shelters, landmark, dispose }`. Procedural ruined city + colliders + shelter coords + central landmark. AABB collider list is consumed by the FPS controller and combat raycasts.
+
+### `world/portals.ts` (in progress, subagent)
+`createVibeJamPortals({ scene, getPlayer, spawnPoint, exitPosition, hostName })` → `{ update() }`. ESM port of vibej.am sample. Detects `?portal=true`, draws green exit + red arrival, handles redirect logic.
+
+### `systems/fps-controller.ts` → `createFpsController({ camera, domElement, player })`
+Pointer lock + WASD + sprint + crouch + jump + gravity + planar-bounded movement. Will gain AABB collision when city colliders land.
+
+### `entities/player.ts` → `createLocalPlayer(opts)`
+Factory. Tags: `player`, `localPlayer`, `alive`. Components: transform, health (100), weapon (mag 20 / reserve 40 / dmg 25), backpack (20 kg), player.
+
+### `ui/debug.ts` → `createDebugPanel({ enabled })`
+Plugin-based debug overlay. `addSection({ id, title, render, order? })` and `addKey({ key, label, group?, fn })`. Rendered at 5 Hz. Stubbed (no-op) when `enabled === false`. Toggle with backquote.
 
 ## Component reference
 
 | Component | Owners | Fields |
 |---|---|---|
-| `transform` | players, bots, projectiles | velocity, grounded |
+| `transform` | players, bots, projectiles | velocity (Vector3), grounded |
 | `health` | players, bots | current, max |
-| `weapon` | players | mag, magSize, reserve, damage, fireRateMs, reloadMs, range |
+| `weapon` | players | magazine, magazineSize, reserve, damage, fireRateMs, reloadMs, lastShotAt, reloading, reloadStartedAt, range |
 | `backpack` | players | capacityKg, weightKg, items[], pendingScore |
 | `player` | players | name, color, isLocal, squadId, netId |
 | `bot` | bots | kind, state, targetId, patrolPath, scoreReward |
 | `loot` | loot pickups | rarity, weightKg, points, itemId |
 | `ammoCrate` | ammo pickups | rounds, weightKg |
 | `medkit` | medkit pickups | heal, weightKg |
-| `shelter` | shelter zones | shelterId, isOpen, opensAt, closesAt |
+| `shelter` | shelter zones | shelterId, isOpen, opensAt, closesAt, position |
 | `net` | networked entities | netId, lastSyncAt, authoritative |
 
 ## Tag reference
@@ -68,9 +92,7 @@ src/
 
 ## Event bus
 
-Typed events on `World`. Producers `world.emit('damage', { ... })`, consumers `world.on('damage', h)`. See `core/types.ts` for the full `EventMap`.
-
-Use events for cross-module communication. **Never** import a system from another system; talk through events.
+Typed events on `World`. Producers `world.emit('damage', { ... })`, consumers `world.on('damage', h)`. See `core/types.ts` for the full `EventMap`. Events: `entity:spawn`, `entity:despawn`, `damage`, `death`, `loot:pickup`, `extract:start`, `extract:complete`, `announce`, `shoot`, `hit`.
 
 ## Network model
 
@@ -78,7 +100,7 @@ Client-authoritative. Each client sends its own state to the PartyKit room; the 
 
 This is jam-grade: cheating exists in theory, no one cares. We trade robustness for shipping in 48 hours.
 
-## Sync schema (preliminary)
+### Sync schema (preliminary)
 
 Client → Room:
 - `hello` { name, color, mode }
@@ -95,19 +117,21 @@ Room → Clients:
 
 ## Performance budget
 
-- 60 FPS target on mid-range laptop (integrated GPU acceptable)
-- Draw distance: 200m, fog from 80m
-- Instanced meshes for repeated geometry (rubble, debris, building blocks)
-- One ambient + ≤6 dynamic lights, baked-feel via emissive materials
+- 60 FPS on mid-range laptop (integrated GPU acceptable)
+- Draw distance: 200 m, fog from 80 m baseline (overridden per atmosphere phase)
+- InstancedMesh for repeated geometry (rubble, debris, building blocks)
+- One ambient + ≤ 6 dynamic lights, baked-feel via emissive materials
 - Total payload < 5 MB (no 3D assets — procedural geometry only; small audio samples)
+- Production build: no debug panel (tree-shaken via `import.meta.env.DEV`).
 
 ## Subagent strategy
 
 Independent modules get spun out as subagents with a clear contract:
-- Input: world API, component definitions, target file path
-- Output: implemented file + brief description of public API
+- Input: project rules, target file paths, public API contract
+- Output: implemented files + brief description of what was built
 - Constraint: only writes inside its assigned module folder
+- Integration: glue happens in main context after the subagent returns
 
-Used for: `world/city.ts`, `systems/ai.ts`, `net/room.ts` (server side), `world/portals.ts`.
+Used so far for: `world/city.ts`, `world/portals.ts`, `partykit/server.ts` + `net/*`.
 
-Glue (entry point, lobby, scene setup, integration) stays in main context.
+Glue (entry point, lobby, scene wiring, system registration) stays in main context.
