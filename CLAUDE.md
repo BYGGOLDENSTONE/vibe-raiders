@@ -1,19 +1,20 @@
 # DUSK — gothic action RPG (Vibe Jam 2026)
 
-> **Submission target:** Cursor Vibe Jam 2026 · deadline **2026-05-01 13:37 UTC** · today **2026-04-29**.
+> **Submission target:** Cursor Vibe Jam 2026 · deadline **2026-05-01 13:37 UTC** · today **2026-04-30**.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders (still named after the previous prototype — rename to `dusk` when convenient).
 > **Genre:** Diablo IV-style 3D action RPG. Click-to-move, hub + open world + dungeon, multiplayer hub, procgen loot.
-> **Status:** systems-complete (waves 0-4) but **visually placeholder**. Next session: polish phase.
+> **Status:** **Polish phase 5 (mechanics + visuals + UI/audio) complete.** Game looks and reads as a D4-clone. Gameplay still feels "early" — combat is shallow because all mob archetypes share one AI, world is static (no respawn, no events, no elite tier), loot is stat-only (no build-defining procs). Next session: **Gameplay Depth phase** — designs incoming from user.
 
 ---
 
 ## Resume here (start of next session)
 
-1. Read this file end-to-end.
-2. `git log --oneline -15` — see how the wave-based commits land.
-3. `npm run dev` (vite at :5173) and `npx partykit dev` (relay at :1999).
-4. Click **PLAY** on the menu, click around the graveyard. Confirm: brighter terrain readable, mouse moves player, hotbar keys cast skills, mobs aggro and die, loot drops, `I` opens inventory, `(15,0,15)` portal warps to dungeon, boss fight works, `(-15,0,-15)` Vibe Jam portal.
-5. Read **"Polish phase priorities"** below — that's the next chunk of work.
+1. Read this file end-to-end — especially **"What's done in Polish phase 5"** and **"Gameplay Depth phase (incoming)"**.
+2. `git log --oneline -15` — last 3 commits are the polish phase.
+3. `npm run dev` (vite, port 5173 / fallbacks to 5175) and optionally `npx partykit dev` (relay at :1999).
+4. Hard refresh (Ctrl+Shift+R). On menu pick a class card (Rogue/Barb/Sorc) → PLAY.
+5. Smoke test: click ground to walk, click enemy → engages at basic-attack range (Sorcerer stops at 12m and shoots, doesn't melee), click loot → walks to it and auto-picks, `1/2/3/Q/SHIFT` casts (locked slots show 🔒), level up → `+1 Skill Point` toast → right-click hotbar slot to spend (rank-up max 5), `I` opens inventory with 3D item icons, HP/Resource are SVG liquid orbs, dungeon portal `(15,0,15)`, boss fight phase-2 cinematic.
+6. **User feedback after polish phase**: "still feels early, doesn't feel like Diablo." User is correct — see the **"Why it doesn't feel like Diablo yet"** section. Next session implements design fixes.
 
 ---
 
@@ -109,92 +110,82 @@ partykit/
 
 ---
 
-## Current visual state — HONEST assessment (this is the polish target)
+## What's done in Polish phase 5 (mechanics + visuals + UI/audio)
 
-What we have now is **functional but placeholder-tier visuals**. Systems all work, but a judge looking for the first 5 seconds will see:
+Three sub-waves shipped — see the 3 "polish-5a/5b/5c" commits.
 
-- Player = a tan capsule. No silhouette, no animation.
-- Mobs = capsule torsos with sphere heads + cylinder limbs. No walk cycles. They slide on the ground. Tiny bob animation only.
-- Boss = composite primitive with cloak Plane-meshes drifting. No skeletal animation, no real swing animation; cloak floats are the main motion cue.
-- Terrain = displaced plane with three vertex-color tiers. Flat lighting feel.
-- Props = instanced boxes/cylinders. No texture, no decoration variation.
-- Particles = simple Points sprites, additive blend, low count.
-- Telegraphs = flat ring/circle/plane meshes. Functional but not menacing.
-- UI = clean and gothic but text-heavy, no item icons (just colored discs with 2-letter abbreviations).
-- Audio = procedural drone + 20 synthesized SFX. Adequate but thin.
-- Skills = basic projectile / AoE / particle bursts. No trail meshes, no swing arcs, no impact decals.
+### Polish-5a — D4 mechanics (input/progression)
+- **Click intent system** (`src/game/input/index.ts`) — LMB raycasts hostile group → `player:engageEnemy` (player walks to `range*0.85`, stops, auto-fires; ranged classes like Sorcerer no longer melee). Loot raycast → `player:pickupTarget` (walks to `pickupRadius*0.5`, intent-priority pickup loop in `loot/index.ts`). Ground fallback = legacy walk. Hold-LMB re-evaluates per frame. UI overlays (`[data-ui]`, `.inv-panel`, `gameState.paused`) block input.
+- **Class-select UI** (`src/game/menu/index.ts`) — 3 cards (Rogue/Barb/Sorc) with class-tinted icon + resource label; PLAY emits `player:classChanged` → player module rebuilds rig + skill module repopulates hotbar.
+- **Skill point + slot unlock** (`combat/index.ts` + `skills/index.ts` + `ui/hud.ts`) — level grants +1 SP; slot 0 (basic) and 5 (dash) start unlocked; slot 1@L2, 2@L4, 3@L7, ult@L10 auto-unlock. Right-click hotbar slot spends a SP to rank-up (max 5). Each rank: +15% damage / -5% cooldown. HUD shows lock overlay + level gate, rank dots, gold "SKILL POINTS" badge, level-up subtitle.
+- **EventMap additions** (`src/core/types.ts`): `player:engageEnemy`, `player:pickupTarget`, `player:classChanged`, `skill:unlocked`, `skillpoint:gained`, `skillpoint:spent`.
+- **Components** (`src/core/components.ts`): `SkillUserComponent` extended with `skillPoints`, `unlockedSlots[]`, `skillRanks[]`.
 
-**This is currently more "tech demo" than "ARPG showcase".** The polish phase below is what turns it into the WOW jam-winner the user originally asked for.
+### Polish-5b — visual polish (player/mobs/FX/dungeon/boss)
+- **Player rig** (`player/index.ts` + `player/animation.ts` + `player/shaders.ts`) — Group hierarchy: head + torso + arms + legs + 3-panel cape + class weapon (rogue daggers / barb greataxe / sorc orb-staff). Procedural walk anim (gait 4-16 rad/s, head bob, limb swing), attack swing 250ms ease-out arc, death anim (z-rot fall + dissolve). Rim-light Fresnel shader (cool blue 0x4060ff) via `onBeforeCompile`. Cape vertex-shader sway. Hot-class-swap rebuilds rig.
+- **Mob silhouettes** (`mobs/archetypes.ts` + `mobs/animation.ts` + `mobs/shaders.ts`) — 5 named child rigs: skeleton-warrior (skull + ribs + sword), skeleton-archer (3-piece bow + limp gait), zombie (hunched + skin patches + biting anim), wraith (cone hood + wavy cape + iridescence shader), brute (oversized double-axe + heavy stomp). Per-archetype gait tuning, attack windup detection (via combat.lastAttackTime + brain state polling — no new event), 0.2s hit shake on `damage:dealt`. Root + child meshes stamped with `userData.entityId` (raycast preserved).
+- **Skill FX** (`fx/elements.ts` + `fx/trails.ts` + `fx/decals.ts` + `skills/index.ts`) — pool-based trails (24 swing TubeGeometry catmull-rom + 32 projectile ring buffer). Pool decals: 16 AoE rune (rotating wedges + counter-rotating sigil), 32 cracked-star hit, 8 telegraph rings, 6 cones, 6 lines. 8-element palette (fire/ice/lightning/poison/arcane/physical/shadow/holy). `dispatchSkillFx()` switches per skill — skill logic untouched.
+- **Dungeon detail** (`dungeons/geometry.ts` + `dungeons/layout.ts` + `dungeons/lighting.ts` + `dungeons/atmosphere.ts`) — per-room ceiling 4-8m, FBM-displaced floor with crimson vertex-color veins, custom pulsing ShaderMaterial for boss-room floor, blood pool + bone scatter + broken columns + dais + brazier. Torches: emissive flame core + additive plume cone + heat-haze placeholder. Crimson fog tint on dungeon enter, restores world fog on exit.
+- **Boss polish** (`boss/index.ts` + `boss/cinematic.ts`) — single ribbon cape (vertex shader sway + velocity drag + polar wrap + gradient hem). Scythe wrapped in parent group with emissive blade + edge ring; cleave windup spawns sweep trail; cleave commit spawns crimson burst. Phase-2: DOM crimson overlay flash + scene burst sphere/light + scythe glow boost + cape color shift. Rune-shader telegraphs (circle/arc/line). Death: 8-sliver radial ground crack + delayed soul ascend (rising additive sphere + drift particles + halo + light).
+
+### Polish-5c — UI & audio
+- **HUD orbs** (`ui/orbs.ts` + `ui/hud.ts`) — SVG liquid-fill orbs replace bottom-corner bars: HP red, Resource class-tinted (green/orange/blue), gothic-metal radial ring, sin-wave animated liquid surface, breathing outer glow, low-HP flicker pulse.
+- **Damage numbers** (`ui/damageNumbers.ts`) — DOM number with arc trajectory (world→screen projection + upward velocity + horizontal jitter + gravity decay), 0.9s lifetime; crit = 1.6x font + gold→white shimmer + screenshake trigger.
+- **Hotbar polish** (`ui/hotbar.ts` + `ui/hud.ts`) — per-slot SVG cooldown ring (stroke-dasharray sweep + tinted drop-shadow), 0.45s outward glow keyframe pulse on cooldown ready edge, retains existing locked-slot lock overlay + rank dots + SP pulse.
+- **3D item icons** (`inventory/itemIcons.ts` + `inventory/index.ts`) — offscreen Three.js renderer (64×64), mini-meshes per slot/baseId (sword/axe/staff/dagger/mace/helm/chest/amulet/ring), 3-light setup with rarity-tinted rim, lazy + cached as base64. Inventory slots show `<img>` instead of 2-letter disc.
+- **Audio layering** (`audio/ambient.ts` + `audio/bossMusic.ts` + `audio/footsteps.ts` + `audio/oneshots.ts`) — 3-layer drone (deep pad 50-80Hz + minor-key bell strikes with reverb tail + filtered airy whisper), zone-aware retuning (graveyard minor / dungeon dissonant / hub bright). Combat-reactive sub-bass thrum, fades 5s after last kill. Boss music: 30s procgen loop (pad arpeggio + 4/4 kick @ 100 BPM + distorted square lead with reverb), 3s riser intro, phase-2 +20% tempo / 2x distortion / 40Hz sub-pulse / drier lead, 4s death fade. Footsteps surface-aware (graveyard pebble vs dungeon stone slap), L/R alternating pan. One-shots 20-40s zone-weighted (howl/raven/thunder/bell graveyard, drip/rumble dungeon).
+
+**Build size after polish:** 850 kB raw / **225 kB gzip** (was 194 kB; +31 kB for all the above is a fine ratio). `npx tsc --noEmit` clean. `npm run build` clean.
 
 ---
 
-## Polish phase priorities (next session — start here)
+## Why it doesn't feel like Diablo yet (user feedback after polish phase)
 
-Order roughly by impact-per-effort. Each is a candidate for a focused subagent.
+The polish phase made the game **look** like D4 but the **gameplay loop is still shallow**. User played and said: "still feels early." The reasons (from the assistant's honest review, ranked by impact):
 
-### 1. Character readability (HIGH — every frame benefits)
-- Player capsule → richer silhouette: head sphere + torso capsule + cloak quads + visible weapon model that swings on attack.
-- Class-distinct silhouettes (rogue = slim with daggers, barb = wide with greataxe, sorc = robed with floating staff).
-- Procedural walk animation: head/torso bob phased with movement direction; arm swing.
-- Attack animation: weapon arc tween on basic / skill cast.
-- Death animation: fall-rotate + dissolve (not just sink-in-place).
+1. **Mob AI is single-pattern.** All 5 archetypes share `mobs/ai.ts` — approach + melee/projectile. Visually they look distinct, but skeleton archers don't kite, zombies don't swarm, wraiths don't phase-shift, brutes don't telegraph charges. Combat is one-note.
+2. **No mob respawn, no dynamic spawn.** 40 mobs spawn at world init, never replaced. Cleared zones stay dead. World feels static after 5 minutes.
+3. **No elite/champion tier.** Every regular mob is the same. D4's "named elite with affix package + golden halo + better loot table" doesn't exist here.
+4. **Loot is stat-only.** 63 affixes are all "+15% damage" / "+25 HP" type. No build-defining procs ("on-hit chance to spawn meteor", "explode on kill", "vampire heal"). No collection / set / unique / aspect feel.
+5. **Progression caps fast.** Level 10 unlocks all skills, max rank 5 fills by level 20-25. After that — nothing. No paragon / glyph / aspect post-cap.
+6. **World is one biome.** Single graveyard, no second zone, no landmarks, no NPCs, no side events, no treasure goblin, no helltide-style rotating events.
+7. **Combat juice is mild.** Hit-stop exists but soft. Crits don't freeze the screen, no bone shrapnel, no knockback physics, no hit-spark mesh bursts.
 
-### 2. Mob silhouettes + anim (HIGH)
-- Each archetype gets a more distinct read: skeleton archers visibly hold a bow, zombies visibly slouch + drag a foot, wraiths get a real cloak with vertex-shader sway, brutes get a comically oversized weapon.
-- Walk-cycle approximation per archetype (different bob frequencies + step jitter).
-- Attack anim: melee mobs do a pre-swing wind-up + commit (telegraph their hit).
-- Hit reaction: knockback on heavy hits, brief stumble.
+These are the gaps the **next session** must address.
 
-### 3. Material / shader pass (HIGH — cheap, big impact)
-- Rim-light shader on characters (Fresnel highlight in cool blue) so they pop against fog.
-- Emissive trim on weapons + boss accents.
-- Subtle iridescence on wraiths.
-- Cracked-stone displacement noise on tombstones / pillars.
-- Wet-look reflective patches on dungeon floor (planar reflections via PMREMGenerator or fake with a normal map equivalent).
+---
 
-### 4. Skill FX overhaul (HIGH — gameplay feel)
-- Trail meshes on melee swings (TubeGeometry along an arc, fading alpha).
-- Projectiles need actual trails (Points emitter behind them, additive).
-- Ground decals on AoE skills (a textured ring that fades, not just a flat ring).
-- Hit decals on impact (cracked-ground variant).
-- Per-element palettes: fire (orange-red plasma), ice (pale blue with refraction), lightning (cyan with branching arcs), poison (sickly green particles).
-- Make basic attack visually satisfying — currently it's the weakest link.
+## Gameplay Depth phase (incoming — next session)
 
-### 5. Boss polish (MEDIUM-HIGH — clip moment)
-- Replace cloak Planes with a flowing ribbon mesh that physics-sways with movement.
-- Scythe gets a visible blade glint + a sweep trail.
-- Phase-2 transition needs a real visual tear (screen warp shader pulse + camera dolly + crimson burst).
-- Death cinematic: slow-mo, zoom in, soul leaving body, ground crack.
-- Telegraph improvements: swirling rune patterns (procedural shader) instead of flat red rings.
+User will paste a design document from claude.ai design output describing the next batch of features. Implement those.
 
-### 6. Dungeon atmosphere (MEDIUM)
-- Variable ceiling heights per room, cracked floor displacement.
-- Rope-bridge style segments between rooms, swaying via vertex shader.
-- Wall sconces with bigger flame plumes + heat-haze post-fx.
-- Boss arena: blood pool decal, scattered bones, broken pillars, raised dais with hero statue.
-- Dungeon-specific fog tint (deep crimson) — currently shares the world fog.
+**Likely candidates** (so the assistant has context when designs arrive):
 
-### 7. UI / inventory polish (MEDIUM)
-- Item icons: instead of 2-letter abbreviation, render a tiny 3D weapon/armor preview into a canvas (Three.js offscreen).
-- Tooltip layout: dividers, comparison arrows (green up / red down), item rarity flavor text line.
-- Hotbar: larger, more dramatic cooldown sweep, ready-pulse animation.
-- Health/resource orbs (Diablo-style) instead of horizontal bars.
-- Damage numbers: chunkier font, color-graded by element, screen-space arc trajectory.
+### High impact (2-3 hours each)
+- **Per-archetype AI** (`mobs/ai.ts` extension): kite (archer), swarm (zombie), phase-shift (wraith), charge-telegraph (brute), pack-leader (one-of-each-elite).
+- **Elite mob tier**: random ~10% of spawns get `isElite=true` → +50% HP, +25% damage, +1 affix package (ranged, fast, vampire, etc.), gold halo VFX, "Elite Skeleton Captain" name plate, guaranteed magic+ drop.
+- **Mob respawn + dynamic spawn**: cleared zone refills after 45s; rare "monster pack" event spawns elite-led group at random graveyard cell.
+- **Combat juice +++**: crit = 0.15s timeScale freeze + screen flash + knockback impulse + bone shrapnel particles (use existing fx pools); whirlwind enemies physically pushed; chain-react explosions on overkill.
 
-### 8. Audio depth (MEDIUM)
-- Replace single-layer drone with 3-layer composition: deep pad + mid harmonic bell strikes + high airy whisper sample.
-- Combat layer: stinger when enemies aggro, thrum during fight, fade to ambience after.
-- Boss music: dedicated 30s loop (procedural still — no asset downloads) with phase-2 intensity ramp.
-- Footsteps: per-surface (stone vs grass-via-noise) at gait rate.
-- Ambient one-shots: distant howl, raven caw, thunder roll, every 20-40s.
+### Medium impact (3-4 hours each)
+- **Legendary "proc" affixes** (8-10 build-defining): meteor-on-hit, explode-on-kill, lifesteal, dodge-turns-ghost, double-strike, freeze-on-crit, etc. Implement via existing affix engine in `loot/`.
+- **Treasure goblin event**: rare flee-AI mob, drops 3-5 legendaries on kill.
+- **2nd biome**: foggy moors north of graveyard (separate scene group, walked-into reveal), new mob skin variants.
+- **NPC + lore bubble**: silent figure at hub, click → text bubble Diablo-style flavor text. Cheap world-life signal.
 
-### 9. Open-world content (LOW-MEDIUM — depth, not first-impression)
-- 2-3 named landmarks beyond the spawn area: ruined chapel, cursed obelisk, frozen pond.
-- A second biome reachable by walking far: foggy moors with twisted trees.
-- Random world events: meteor shower (timed AoE), elite mob roaming, treasure goblin that flees.
-- Mob respawn after 60s in cleared areas.
+### Stretch (only if time permits)
+- **Aspect / set system** — drop "imprintable powers" from elite kills, user can apply to gear.
+- **Paragon mini-board** — post-level-10 each level grants a paragon point with a small node selection.
 
-### 10. Multiplayer richness (LOW)
+### Implementation approach when designs arrive
+- Treat the design doc as truth. Group by file boundary, then dispatch parallel subagents per group (same wave-based pattern that worked).
+- Add new EventMap entries in `src/core/types.ts` upfront so subagents don't collide.
+- Always run `npx tsc --noEmit && npm run build` before committing.
+- Wave-by-wave commits with detailed bodies (per CLAUDE.md style).
+
+---
+
+## Multiplayer richness (LOW priority for jam)
 - Real party state via protocol extension (currently local-only): server-side party rooms.
 - Trade UI between hub players.
 - Visible damage / class info on remote ghost name tags.
