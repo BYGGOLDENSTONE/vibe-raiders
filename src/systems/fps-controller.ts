@@ -12,6 +12,8 @@ export interface FpsControllerOptions {
   worldHalfSize?: number;
   colliders?: Collider[];
   playerRadius?: number;
+  /** Optional per-frame ground sampler. If provided, overrides groundY. */
+  getGroundHeight?: (x: number, z: number) => number;
 }
 
 export interface FpsController {
@@ -33,9 +35,10 @@ const MOUSE_SENSITIVITY = 0.0022;
 
 export function createFpsController(opts: FpsControllerOptions): FpsController {
   const { camera, domElement, player } = opts;
-  const groundY = opts.groundY ?? 0;
+  const fallbackGroundY = opts.groundY ?? 0;
   const halfSize = opts.worldHalfSize ?? 240;
   const playerRadius = opts.playerRadius ?? 0.45;
+  const getGroundHeight = opts.getGroundHeight;
   let colliders: Collider[] = opts.colliders ?? [];
 
   const euler = new Euler(0, 0, 0, 'YXZ');
@@ -124,7 +127,10 @@ export function createFpsController(opts: FpsControllerOptions): FpsController {
     player.object3d.position.y += transform.velocity.y * dt;
     player.object3d.position.z += transform.velocity.z * dt;
 
-    // ground collision (flat for now)
+    // ground collision — sample heightmap if available.
+    const groundY = getGroundHeight
+      ? getGroundHeight(player.object3d.position.x, player.object3d.position.z)
+      : fallbackGroundY;
     if (player.object3d.position.y <= groundY) {
       player.object3d.position.y = groundY;
       transform.velocity.y = 0;

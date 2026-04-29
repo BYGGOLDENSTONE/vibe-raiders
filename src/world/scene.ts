@@ -7,8 +7,6 @@ import {
   Fog,
   Color,
   Mesh,
-  PlaneGeometry,
-  MeshStandardMaterial,
   Vector3,
   ACESFilmicToneMapping,
   PCFSoftShadowMap,
@@ -48,32 +46,33 @@ export function createSceneBundle(canvas: HTMLCanvasElement): SceneBundle {
 
   const scene = new Scene();
   scene.background = new Color(0x1a0e06);
-  const fog = new Fog(0xb8723a, 40, 220);
+  // Fog tuned for the 400×400 m world. Atmosphere phases override these.
+  const fog = new Fog(0xb8723a, 40, 380);
   scene.fog = fog;
 
-  const camera = new PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 600);
+  const camera = new PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 1500);
   camera.position.set(0, 1.7, 0);
 
   const hemi = new HemisphereLight(0xff8a3c, 0x4a3850, 0.95);
   scene.add(hemi);
 
   const sun = new DirectionalLight(0xffd28a, 1.6);
-  sun.position.set(-60, 40, -30);
+  sun.position.set(-100, 80, -60);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
-  sun.shadow.camera.left = -80;
-  sun.shadow.camera.right = 80;
-  sun.shadow.camera.top = 80;
-  sun.shadow.camera.bottom = -80;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -180;
+  sun.shadow.camera.right = 180;
+  sun.shadow.camera.top = 180;
+  sun.shadow.camera.bottom = -180;
   sun.shadow.camera.near = 0.5;
-  sun.shadow.camera.far = 200;
+  sun.shadow.camera.far = 400;
   sun.shadow.bias = -0.0005;
   scene.add(sun);
 
   const { mesh: sky, uniforms: skyUniforms } = makeSky();
   scene.add(sky);
 
-  scene.add(makeGround());
+  // Ground is now provided by the world generator (heightmap mesh).
 
   const resize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -85,21 +84,8 @@ export function createSceneBundle(canvas: HTMLCanvasElement): SceneBundle {
   return { renderer, scene, camera, sun, hemi, fog, skyUniforms, resize };
 }
 
-function makeGround(): Mesh {
-  const geom = new PlaneGeometry(500, 500, 1, 1);
-  const mat = new MeshStandardMaterial({
-    color: 0x3a2418,
-    roughness: 1.0,
-    metalness: 0.0,
-  });
-  const m = new Mesh(geom, mat);
-  m.rotation.x = -Math.PI / 2;
-  m.receiveShadow = true;
-  return m;
-}
-
 function makeSky(): { mesh: Mesh; uniforms: SceneBundle['skyUniforms'] } {
-  const geom = new SphereGeometry(400, 32, 16);
+  const geom = new SphereGeometry(1000, 32, 16);
   const horizonCol = new Color(0xff8a3c);
   const zenithCol = new Color(0x2d1a3a);
   const glowCol = new Color(0xff8c33);

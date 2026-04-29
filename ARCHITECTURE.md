@@ -55,8 +55,14 @@ Returns `{ renderer, scene, camera, sun, hemi, fog, skyUniforms, resize }`. The 
 ### `world/atmosphere.ts` → `createAtmosphere(bundle)`
 4-phase color cycle. Tween skies, sun, hemi, fog, exposure, and clear color smoothly. Phases (`PHASES`): GOLDEN HOUR · DUST STORM · ASHEN HAZE · BLOOD VEIL. 75 s each, 5 min total. Returns `{ update(dt), currentPhaseName(), setTime(s), totalCycleSec() }`.
 
-### `world/city.ts` (in progress, subagent)
-`generateCity({ scene, seed, opts? })` → `{ colliders, shelters, landmark, dispose }`. Procedural ruined city + colliders + shelter coords + central landmark. AABB collider list is consumed by the FPS controller and combat raycasts.
+### `world/map.ts` → `generateWorld({ scene, seed, size? })`
+Orchestrates the full 400×400 m multi-biome world. Builds the heightmap, calls each biome (`biomes/{city,industrial,dam,forest,mountain}.ts`), aggregates colliders + shelters + landmarks, places 4 shelters (one per biome), spawns distant silhouettes. Returns `{ colliders, shelters, landmarks, bounds, groundHeight, update, dispose }`. AABB collider list is consumed by the FPS controller and combat raycasts; `groundHeight(x,z)` is sampled by the FPS controller every frame.
+
+### `world/heightmap.ts`
+Defines the procedural heightmap. Exposes `groundHeight(x,z)`, `buildHeightmap()` (returns the vertex-colored Mesh + sampler), and `REGIONS` (per-biome rectangular regions used by the orchestrator).
+
+### `world/biomes/*`
+Per-biome generators. Each exports a `buildXxxBiome(opts)` that returns `{ colliders, shelterCandidates, landmarks, update? }`. They share `_common.ts` (geometry merge helpers) and never import outside `world/`.
 
 ### `world/portals.ts` (in progress, subagent)
 `createVibeJamPortals({ scene, getPlayer, spawnPoint, exitPosition, hostName })` → `{ update() }`. ESM port of vibej.am sample. Detects `?portal=true`, draws green exit + red arrival, handles redirect logic.

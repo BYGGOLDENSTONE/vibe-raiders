@@ -2,10 +2,11 @@ import { Clock } from 'three';
 import { World } from './core/world';
 import { createSceneBundle } from './world/scene';
 import { createAtmosphere, PHASES } from './world/atmosphere';
-import { generateCity } from './world/city';
+import { generateWorld } from './world/map';
 import { createFpsController } from './systems/fps-controller';
 import { createLocalPlayer } from './entities/player';
 import { createDebugPanel, dbgRow, dbgBar } from './ui/debug';
+import { createPostPipeline } from './render/post';
 import { C, type TransformComponent, type HealthComponent, type WeaponComponent, type BackpackComponent } from './core/components';
 import { getComponent } from './core/entity';
 
@@ -15,14 +16,23 @@ const boot = document.getElementById('boot');
 const bundle = createSceneBundle(canvas);
 const { renderer, scene, camera } = bundle;
 
+const post = createPostPipeline({ renderer, scene, camera });
+
+const onResize = () => post.resize(window.innerWidth, window.innerHeight);
+window.addEventListener('resize', onResize);
+
 const atmosphere = createAtmosphere(bundle);
 
 const CITY_SEED = Math.floor(Math.random() * 1_000_000);
-const city = generateCity({ scene, seed: CITY_SEED });
+const worldMap = generateWorld({ scene, seed: CITY_SEED });
 
-// Pick a random shelter as the spawn position. Y stays at ground (0).
-const spawnShelter = city.shelters[Math.floor(Math.random() * city.shelters.length)];
-const spawnPos = { x: spawnShelter.position[0], y: 0, z: spawnShelter.position[2] };
+// Pick a random shelter as the spawn position. Y is sampled from the heightmap.
+const spawnShelter = worldMap.shelters[Math.floor(Math.random() * worldMap.shelters.length)];
+const spawnPos = {
+  x: spawnShelter.position[0],
+  y: worldMap.groundHeight(spawnShelter.position[0], spawnShelter.position[2]),
+  z: spawnShelter.position[2],
+};
 
 const world = new World(scene);
 const player = createLocalPlayer({ spawn: spawnPos });
@@ -32,8 +42,9 @@ const fps = createFpsController({
   camera,
   domElement: canvas,
   player,
-  colliders: city.colliders,
-  worldHalfSize: 240,
+  colliders: worldMap.colliders,
+  worldHalfSize: 200,
+  getGroundHeight: worldMap.groundHeight,
 });
 
 const debug = createDebugPanel({ enabled: import.meta.env.DEV });
@@ -62,13 +73,20 @@ debug.addKey({ key: 'BracketRight', label: 'fast ×2', group: 'atmosphere', fn: 
 debug.addKey({ key: 'KeyR', label: 'reset cycle', group: 'atmosphere', fn: () => { atmosphere.setTime(0); atmosphereTimeRef = 0; atmosphereTimeScale = 1; atmospherePaused = false; } });
 
 debug.addKey({
+  key: 'KeyN',
+  label: 'toggle post-fx',
+  group: 'render',
+  fn: () => { post.setEnabled(!post.isEnabled()); },
+});
+
+debug.addKey({
   key: 'KeyT',
   label: 'tp to next shelter',
   group: 'world',
   fn: () => {
-    const idx = (city.shelters.findIndex(s => Math.abs(s.position[0] - player.object3d.position.x) < 5 && Math.abs(s.position[2] - player.object3d.position.z) < 5) + 1) % city.shelters.length;
-    const s = city.shelters[idx];
-    player.object3d.position.set(s.position[0], 0, s.position[2]);
+    const idx = (worldMap.shelters.findIndex(s => Math.abs(s.position[0] - player.object3d.position.x) < 5 && Math.abs(s.position[2] - player.object3d.position.z) < 5) + 1) % worldMap.shelters.length;
+    const s = worldMap.shelters[idx];
+    player.object3d.position.set(s.position[0], worldMap.groundHeight(s.position[0], s.position[2]), s.position[2]);
     const t = getComponent<TransformComponent>(player, C.Transform);
     if (t) t.velocity.set(0, 0, 0);
   },
@@ -140,9 +158,9 @@ debug.addSection({
   render: () => {
     return (
       dbgRow('seed', String(CITY_SEED)) +
-      dbgRow('shelters', String(city.shelters.length)) +
-      dbgRow('colliders', String(city.colliders.length)) +
-      dbgRow('landmark', `${city.landmark.kind}`)
+      dbgRow('shelters', String(worldMap.shelters.length)) +
+      dbgRow('colliders', String(worldMap.colliders.length)) +
+      dbgRow('landmarks', String(worldMap.landmarks.length))
     );
   },
 });
@@ -169,11 +187,11 @@ function loop() {
     atmosphereTimeRef += scaled;
   }
 
-  city.update?.(elapsed);
+  worldMap.update?.(elapsed);
 
   fps.update(dt);
   world.tick(dt);
-  renderer.render(scene, camera);
+  post.render();
 
   fpsAccum += dt; fpsFrames++;
   if (fpsAccum >= 0.5) { fpsValue = fpsFrames / fpsAccum; fpsAccum = 0; fpsFrames = 0; }
