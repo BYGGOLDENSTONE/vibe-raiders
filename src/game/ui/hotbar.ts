@@ -11,6 +11,14 @@ export interface HotbarSlotRefs {
   cooldown: HTMLElement;
   cooldownText: HTMLElement;
   glyph: HTMLElement;
+  /** SVG ring stroke node for the dramatic cooldown sweep. */
+  ringStroke?: SVGCircleElement;
+  /** Container element for the ring (toggle visibility). */
+  ringWrap?: SVGSVGElement;
+  /** Cached cooldown total (last seen `remaining`) for sweep ratio. */
+  cooldownTotal?: number;
+  /** True last frame this slot was on cooldown — used to detect ready edge. */
+  wasOnCooldown?: boolean;
 }
 
 export interface HotbarRefs {
@@ -75,6 +83,26 @@ export function buildHotbar(ctx: GameContext): HotbarRefs {
     cooldownText.className = 'dusk-slot-cd-text';
     slot.appendChild(cooldownText);
 
+    // SVG cooldown ring overlay (drawn on top of the conic-gradient mask
+    // for an extra dramatic sweep + glow).
+    const NS = 'http://www.w3.org/2000/svg';
+    const ringWrap = document.createElementNS(NS, 'svg');
+    ringWrap.setAttribute('class', 'dusk-slot-cd-ring');
+    ringWrap.setAttribute('viewBox', '0 0 56 56');
+    const ringStroke = document.createElementNS(NS, 'circle');
+    ringStroke.setAttribute('cx', '28');
+    ringStroke.setAttribute('cy', '28');
+    ringStroke.setAttribute('r', '25');
+    ringStroke.setAttribute('stroke', def.color);
+    ringStroke.setAttribute('stroke-width', '2.4');
+    ringStroke.setAttribute('opacity', '0.95');
+    const C = 2 * Math.PI * 25;
+    ringStroke.setAttribute('stroke-dasharray', String(C));
+    ringStroke.setAttribute('stroke-dashoffset', String(C));
+    ringStroke.style.filter = 'drop-shadow(0 0 4px ' + def.color + ')';
+    ringWrap.appendChild(ringStroke);
+    slot.appendChild(ringWrap as unknown as Node);
+
     if (def.group === 'dash') dashGroup.appendChild(slot);
     else mainGroup.appendChild(slot);
 
@@ -82,7 +110,16 @@ export function buildHotbar(ctx: GameContext): HotbarRefs {
     while (slots.length <= def.idx) {
       slots.push(null as unknown as HotbarSlotRefs);
     }
-    slots[def.idx] = { root: slot, cooldown, cooldownText, glyph };
+    slots[def.idx] = {
+      root: slot,
+      cooldown,
+      cooldownText,
+      glyph,
+      ringStroke,
+      ringWrap,
+      cooldownTotal: 1,
+      wasOnCooldown: false,
+    };
   }
 
   bar.appendChild(dashGroup);
@@ -106,24 +143,49 @@ export function updateHotbar(refs: HotbarRefs, elapsed: number): void {
 
     const remaining = Math.max(0, slot.cooldownEnd - elapsed);
     if (remaining > 0) {
-      // Approximate cooldown total via lookup so we can render a clockwise sweep.
-      // We don't have the original cooldown duration stored; use a soft 1s cap so
-      // overlays still animate visibly even when we can't read the duration.
-      // Visual sweep: full at start, empties as cooldown nears 0.
-      const ratio = Math.min(1, remaining / Math.max(remaining + 0.01, 1));
+      // Track the largest 'remaining' we've seen for this active cooldown so
+      // the sweep fills proportionally instead of always reading near-1.
+      if (!slotRefs.wasOnCooldown || remaining > (slotRefs.cooldownTotal ?? 0)) {
+        slotRefs.cooldownTotal = remaining;
+      }
+      const total = Math.max(0.01, slotRefs.cooldownTotal ?? remaining);
+      const ratio = Math.min(1, remaining / total);
       const angle = ratio * 360;
-      slotRefs.cooldown.style.background = `conic-gradient(rgba(0,0,0,0.72) 0deg, rgba(0,0,0,0.72) ${angle}deg, transparent ${angle}deg, transparent 360deg)`;
+      slotRefs.cooldown.style.background = `conic-gradient(rgba(0,0,0,0.78) 0deg, rgba(0,0,0,0.78) ${angle}deg, transparent ${angle}deg, transparent 360deg)`;
       slotRefs.cooldown.style.opacity = '1';
       slotRefs.cooldownText.textContent = remaining >= 1
         ? `${Math.ceil(remaining)}`
         : remaining.toFixed(1);
       slotRefs.cooldownText.style.opacity = '1';
       slotRefs.root.classList.remove('dusk-slot-ready');
+
+      // SVG ring stroke sweep.
+      if (slotRefs.ringStroke && slotRefs.ringWrap) {
+        const C = 2 * Math.PI * 25;
+        // Empties as cooldown nears 0 → dashoffset goes from 0 (full ring) to C (empty).
+        const offset = C * (1 - ratio);
+        slotRefs.ringStroke.setAttribute('stroke-dashoffset', String(offset.toFixed(2)));
+        slotRefs.ringWrap.classList.add('dusk-slot-cd-ring-on');
+      }
+      slotRefs.wasOnCooldown = true;
     } else {
       slotRefs.cooldown.style.opacity = '0';
       slotRefs.cooldownText.textContent = '';
       slotRefs.cooldownText.style.opacity = '0';
       slotRefs.root.classList.add('dusk-slot-ready');
+
+      if (slotRefs.ringWrap) {
+        slotRefs.ringWrap.classList.remove('dusk-slot-cd-ring-on');
+      }
+      // Detect ready-edge (was on cooldown last frame, now not) → fire pulse.
+      if (slotRefs.wasOnCooldown) {
+        slotRefs.root.classList.remove('dusk-slot-ready-flash');
+        // Force reflow so re-adding restarts the keyframe.
+        void slotRefs.root.offsetWidth;
+        slotRefs.root.classList.add('dusk-slot-ready-flash');
+        slotRefs.cooldownTotal = 1;
+      }
+      slotRefs.wasOnCooldown = false;
     }
   }
 }

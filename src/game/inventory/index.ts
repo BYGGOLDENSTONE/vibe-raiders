@@ -23,6 +23,7 @@ import {
 } from '../../core/components';
 import type { Entity } from '../../core/types';
 import { createEntity, getComponent } from '../../core/entity';
+import { getItemIcon } from './itemIcons';
 
 // ---------- Tooltip line builder ----------
 
@@ -487,8 +488,35 @@ function dropFromInventory(ctx: GameContext, item: ItemInstance): void {
 function renderItemIcon(item: ItemInstance): HTMLDivElement {
   const icon = document.createElement('div');
   icon.className = `inv-icon rarity-${item.rarity}`;
-  icon.style.background = `radial-gradient(circle at 35% 30%, ${colorIntToHex(item.iconColor)}, ${shade(colorIntToHex(item.iconColor), -0.55)})`;
-  icon.textContent = abbreviation(item.name);
+  // Subtle rarity-tinted background gradient under the 3D image so empty alpha
+  // pixels still read as "an item lives here".
+  icon.style.background = `radial-gradient(circle at 35% 28%, ${shade(colorIntToHex(item.iconColor), 0.05)} 0%, ${shade(colorIntToHex(item.iconColor), -0.78)} 90%)`;
+  icon.textContent = '';
+
+  // 3D mini-render — lazily produced and cached per archetype.
+  let dataURL: string | null = null;
+  try {
+    dataURL = getItemIcon(item);
+  } catch {
+    // Fallback to abbreviation if WebGL fails for any reason.
+    icon.textContent = abbreviation(item.name);
+    return icon;
+  }
+  const img = document.createElement('img');
+  img.src = dataURL;
+  img.alt = item.name;
+  img.draggable = false;
+  img.style.cssText = [
+    'position:absolute',
+    'inset:2px',
+    'width:calc(100% - 4px)',
+    'height:calc(100% - 4px)',
+    'object-fit:contain',
+    'pointer-events:none',
+    'image-rendering:auto',
+    'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.85))',
+  ].join(';');
+  icon.appendChild(img);
   return icon;
 }
 
