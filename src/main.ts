@@ -15,6 +15,8 @@ import { initInventory } from './game/inventory';
 import { initUI } from './game/ui';
 import { initFx } from './game/fx';
 import { initAudio } from './game/audio';
+import { initDungeons } from './game/dungeons';
+import { initBoss } from './game/boss';
 import { initPortal } from './game/portal';
 import { initMultiplayer } from './multiplayer';
 import { COLORS } from './game/constants';
@@ -50,6 +52,8 @@ initInventory(ctx);
 initUI(ctx);
 initFx(ctx);
 initAudio(ctx);
+initDungeons(ctx);
+initBoss(ctx);
 initPortal(ctx);
 initMultiplayer(ctx);
 
