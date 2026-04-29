@@ -88,24 +88,12 @@ export function mobAISystem(world: World, ctx: { dt: number; elapsed: number }):
       runtime.flashEndTime = 0;
     }
 
-    // ===== Death handling =====
+    // ===== Death handling — combat owns mob:killed / entity:died emission and despawn. =====
+    // We just play the visual sink/rotate animation while the entity is alive.
     if (brain.state === 'dead') {
-      // Sink + fade then despawn
       const tDead = now - runtime.deathStartTime;
       e.object3d.position.y = (arch.yOffset + bob) - tDead * 0.5;
       e.object3d.rotation.z = Math.min(Math.PI / 2, tDead * 2.5);
-      if (!runtime.hasEmittedKilled) {
-        runtime.hasEmittedKilled = true;
-        world.emit('mob:killed', {
-          entityId: e.id,
-          killerId: null, // Wave 2 combat will know better
-          xpReward: arch.xpReward,
-        });
-        world.emit('entity:died', { entityId: e.id, killerId: null });
-      }
-      if (tDead >= 1.0) {
-        world.despawn(e.id);
-      }
       continue;
     }
 

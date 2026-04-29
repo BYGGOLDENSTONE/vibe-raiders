@@ -55,18 +55,13 @@ export function initMobs(ctx: GameContext): void {
     counts[arch.id]++;
   }
 
-  // Hit feedback + Wave-1 damage application stub.
-  // WAVE2_OWNS_DAMAGE: remove the HP-application block once the combat module exists.
+  // Visual feedback for hits on our mobs. Combat owns HP application — we just
+  // render the floating damage number and red flash here.
   world.on('damage:dealt', (payload) => {
     const target = world.get(payload.targetId);
     if (!target || !target.tags.has('mob')) return;
     const runtime = target.components.get(MOB_RUNTIME) as MobRuntime | undefined;
-    const health = target.components.get(C.Health) as HealthComponent | undefined;
-    if (!runtime || !health) return;
-
-    // ---- WAVE-1 STUB: apply HP loss ----
-    health.hp = Math.max(0, health.hp - payload.amount);
-    health.lastHitTime = performance.now() / 1000;
+    if (!runtime) return;
 
     // Floating damage text
     world.emit('fx:floatingText', {
@@ -172,6 +167,10 @@ function spawnMob(ctx: GameContext, arch: ArchetypeDef, pos: Vector3): Entity {
     hasEmittedKilled: false,
   };
   setComponent<MobRuntime>(entity, MOB_RUNTIME, runtime);
+
+  // Per-archetype XP reward — combat reads this string-keyed component when
+  // crediting kills via mob:killed.
+  entity.components.set('mobXpReward', arch.xpReward);
 
   ctx.world.spawn(entity);
   return entity;

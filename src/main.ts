@@ -18,7 +18,7 @@ import { initAudio } from './game/audio';
 import { initPortal } from './game/portal';
 import { initMultiplayer } from './multiplayer';
 import { COLORS } from './game/constants';
-import type { GameContext } from './game/state';
+import { gameState, type GameContext } from './game/state';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 const uiRoot = document.getElementById('ui-root') as HTMLElement;
@@ -36,7 +36,7 @@ const camera = new PerspectiveCamera(50, window.innerWidth / window.innerHeight,
 
 const world = new World(scene);
 
-const ctx: GameContext = { world, scene, camera, renderer, uiRoot, canvas };
+const ctx: GameContext = { world, scene, camera, renderer, uiRoot, canvas, renderHook: null };
 
 initWorld(ctx);
 initPlayer(ctx);
@@ -63,9 +63,11 @@ if (boot) boot.style.display = 'none';
 
 const clock = new Clock();
 function loop(): void {
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const rawDt = Math.min(clock.getDelta(), 0.05);
+  const dt = rawDt * gameState.timeScale;
   world.tick(dt);
-  renderer.render(scene, camera);
+  if (ctx.renderHook) ctx.renderHook();
+  else renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
 loop();
