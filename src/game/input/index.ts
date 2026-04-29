@@ -53,17 +53,22 @@ export function initInput(ctx: GameContext): void {
     });
   }
 
-  ctx.canvas.addEventListener('mousedown', (e) => {
+  // Listen on document so any overlay that wasn't pointer-events:none doesn't
+  // swallow the click. Canvas was the original target but proved fragile.
+  document.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
+    // Skip clicks on UI panels (let DOM elements handle them normally).
+    const target = e.target as HTMLElement | null;
+    if (target && target.tagName !== 'CANVAS' && target.closest('[data-ui]')) return;
     mouseDown = true;
     lastMouseX = e.clientX;
     lastMouseY = e.clientY;
     applyMoveCommand(e.clientX, e.clientY);
   });
-  ctx.canvas.addEventListener('mouseup', (e) => {
+  document.addEventListener('mouseup', (e) => {
     if (e.button === 0) mouseDown = false;
   });
-  ctx.canvas.addEventListener('mousemove', (e) => {
+  document.addEventListener('mousemove', (e) => {
     if (mouseDown) {
       lastMouseX = e.clientX;
       lastMouseY = e.clientY;

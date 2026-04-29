@@ -14,7 +14,6 @@
 // client messages are `hello | input`. There is no chat or party broadcast.
 // Party state is therefore a LOCAL visual treatment only.
 
-import { Raycaster, Vector2 } from 'three';
 import type { GameContext } from '../game/state';
 import { gameState } from '../game/state';
 import type { PlayerState } from '../net/protocol';
@@ -161,38 +160,9 @@ export function initMultiplayer(ctx: GameContext): void {
     }
   });
 
-  // ---- Click-to-invite (raycast against ghost meshes) ----
-  const raycaster = new Raycaster();
-  const ndc = new Vector2();
-  const onPointerDown = (ev: PointerEvent): void => {
-    try {
-      // Only act on left click.
-      if (ev.button !== 0) return;
-      const rect = ctx.canvas.getBoundingClientRect();
-      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(ndc, ctx.camera);
-      const meshes = ghosts.meshList();
-      if (meshes.length === 0) return;
-      const hits = raycaster.intersectObjects(meshes, false);
-      if (hits.length === 0) return;
-      const hit = hits[0]!;
-      const id = (hit.object.userData as { ghostId?: string }).ghostId;
-      if (!id) return;
-      // Silent toggle — keeps the click feel snappy. The party panel
-      // reflects the change immediately.
-      togglePartyMember(id);
-      refreshRoster();
-      // Stop propagation so the ARPG's click-to-move doesn't fire on the same
-      // press. Multiplayer click claims the input.
-      ev.stopPropagation();
-      ev.preventDefault();
-    } catch (err) {
-      console.warn('[multiplayer] raycast failed', err);
-    }
-  };
-  // Capture phase so we run before move-handlers attached to canvas/document.
-  ctx.canvas.addEventListener('pointerdown', onPointerDown, { capture: true });
+  // Click-to-invite intentionally disabled — pointerdown capture + preventDefault
+  // was suppressing the canvas mousedown that ARPG locomotion depends on.
+  // Party toggle is still available via the party panel rows.
 
   // ---- Window unload: clean shutdown ----
   const onUnload = (): void => {
