@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "party:dev": "partykit dev",
+    "party:deploy": "partykit deploy"
   },
   "devDependencies": {
     "@types/three": "^0.184.0",
@@ -14,6 +16,8 @@
     "vite": "^8.0.10"
   },
   "dependencies": {
+    "partykit": "^0.0.115",
+    "partysocket": "^1.1.18",
     "three": "^0.184.0"
   }
 }

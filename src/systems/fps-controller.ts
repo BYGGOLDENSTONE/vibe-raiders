@@ -2,6 +2,7 @@ import { Vector3, Euler, type PerspectiveCamera } from 'three';
 import type { Entity } from '../core/types';
 import { C, type TransformComponent } from '../core/components';
 import { getComponent } from '../core/entity';
+import { pushOutXZ, type Collider } from '../world/colliders';
 
 export interface FpsControllerOptions {
   camera: PerspectiveCamera;
@@ -9,12 +10,15 @@ export interface FpsControllerOptions {
   player: Entity;
   groundY?: number;
   worldHalfSize?: number;
+  colliders?: Collider[];
+  playerRadius?: number;
 }
 
 export interface FpsController {
   update: (dt: number) => void;
   isLocked: () => boolean;
   requestLock: () => void;
+  setColliders: (c: Collider[]) => void;
   dispose: () => void;
 }
 
@@ -31,6 +35,8 @@ export function createFpsController(opts: FpsControllerOptions): FpsController {
   const { camera, domElement, player } = opts;
   const groundY = opts.groundY ?? 0;
   const halfSize = opts.worldHalfSize ?? 240;
+  const playerRadius = opts.playerRadius ?? 0.45;
+  let colliders: Collider[] = opts.colliders ?? [];
 
   const euler = new Euler(0, 0, 0, 'YXZ');
   euler.setFromQuaternion(camera.quaternion);
@@ -132,6 +138,11 @@ export function createFpsController(opts: FpsControllerOptions): FpsController {
     if (player.object3d.position.z < -half) player.object3d.position.z = -half;
     if (player.object3d.position.z > half) player.object3d.position.z = half;
 
+    // resolve AABB collisions on XZ
+    if (colliders.length > 0) {
+      pushOutXZ(player.object3d.position, playerRadius, currentHeight, colliders);
+    }
+
     // smooth crouch height
     const targetH = crouching ? CROUCH_HEIGHT : STAND_HEIGHT;
     currentHeight += (targetH - currentHeight) * Math.min(1, dt * 12);
@@ -154,6 +165,7 @@ export function createFpsController(opts: FpsControllerOptions): FpsController {
     update,
     isLocked: () => locked,
     requestLock: () => domElement.requestPointerLock(),
+    setColliders: (c: Collider[]) => { colliders = c; },
     dispose,
   };
 }

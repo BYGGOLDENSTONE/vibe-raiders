@@ -9,7 +9,6 @@ import {
   Mesh,
   PlaneGeometry,
   MeshStandardMaterial,
-  BoxGeometry,
   Vector3,
   ACESFilmicToneMapping,
   PCFSoftShadowMap,
@@ -75,23 +74,6 @@ export function createSceneBundle(canvas: HTMLCanvasElement): SceneBundle {
   scene.add(sky);
 
   scene.add(makeGround());
-
-  for (let i = 0; i < 12; i++) {
-    const w = 2 + Math.random() * 4;
-    const h = 1.5 + Math.random() * 6;
-    const d = 2 + Math.random() * 4;
-    const m = new Mesh(
-      new BoxGeometry(w, h, d),
-      new MeshStandardMaterial({ color: new Color().setHSL(0.07, 0.2, 0.18 + Math.random() * 0.12), roughness: 0.95 }),
-    );
-    const angle = (i / 12) * Math.PI * 2;
-    const radius = 12 + Math.random() * 18;
-    m.position.set(Math.cos(angle) * radius, h / 2, Math.sin(angle) * radius);
-    m.rotation.y = Math.random() * Math.PI;
-    m.castShadow = true;
-    m.receiveShadow = true;
-    scene.add(m);
-  }
 
   const resize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;

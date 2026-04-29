@@ -10,7 +10,7 @@ This file is the source of truth for resuming the session. Read it first.
 
 ## Current phase
 
-**P1 — World & integration.** Bootstrap is done. We are filling in the world (city, portals) and the netcode skeleton in parallel via subagents.
+**P2 — Gameplay systems.** World skeleton is in. Next: combat, AI, loot, shelters, lobby.
 
 ## What is done
 
@@ -19,35 +19,32 @@ This file is the source of truth for resuming the session. Read it first.
 - [x] Modular layout: `src/{core,world,entities,systems,net,ui,audio}`
 - [x] **ECS-lite core** (`src/core/`): Entity, World, components, tags, typed event bus
 - [x] **Scene** (`src/world/scene.ts`): renderer, camera, sun, hemi, fog, sky shader (returns uniforms for atmosphere mutation)
-- [x] **Atmosphere cycle** (`src/world/atmosphere.ts`): 4 phases (Golden Hour → Dust Storm → Ashen Haze → Blood Veil) lerping over 5 min loop. All uniforms/lights/fog/exposure tween smoothly.
-- [x] **FPS controller** (`src/systems/fps-controller.ts`): pointer lock, WASD, sprint, crouch toggle, jump, gravity, world bounds. No AABB collision yet.
+- [x] **Atmosphere cycle** (`src/world/atmosphere.ts`): 4 phases (Golden Hour → Dust Storm → Ashen Haze → Blood Veil) lerping over 5 min loop.
+- [x] **Procedural city** (`src/world/{rng,palette,colliders,city}.ts`): seeded mulberry32 RNG, mid-tone palette, AABB collider list with `pushOutXZ` + `raycastColliders`, 250×250m ruined city via merged geometries (~17 draw calls), 480 instanced rubble pieces, 4 corner shelters, tilted-truss central landmark, 7 flickering fires, dust particles. `update(t)` drives flicker.
+- [x] **Vibe Jam portals** (`src/world/portals.ts`): ESM port of `vibej.am` sample. `createVibeJamPortals` returns `{ update, arrivedViaPortal, arrivalParams, dispose }`. NOT yet placed in the world (will land with the lobby).
+- [x] **PartyKit server skeleton** (`partykit/server.ts`, `src/net/{protocol,client}.ts`): room caps 12, 10Hz state broadcast, `setInterval` shelter rotation. `package.json` scripts: `party:dev`, `party:deploy`. NOT yet hooked into the game loop. `npx partykit dev` boots locally on `:1999`.
+- [x] **FPS controller** (`src/systems/fps-controller.ts`): pointer lock, WASD, sprint, crouch toggle, jump, gravity, world bounds, **AABB collision via `pushOutXZ`** (radius 0.45m, height-aware vertical overlap test). `setColliders(c)` to swap at runtime.
 - [x] **Player entity** (`src/entities/player.ts`): factory with transform/health/weapon/backpack/player components.
-- [x] **Debug panel** (`src/ui/debug.ts`): toggleable with backquote, plugin sections + key bindings, stub in prod via `import.meta.env.DEV`. Built-in sections: PERF, ATMOSPHERE, PLAYER. Atmosphere keys: B/P/[/]/R.
+- [x] **Debug panel** (`src/ui/debug.ts`): toggleable with backquote, plugin sections + key bindings, stub in prod via `import.meta.env.DEV`. Built-in sections: PERF, ATMOSPHERE, PLAYER, WORLD (city seed/colliders/landmark). Atmosphere keys: B/P/[/]/R. World keys: T (tp to next shelter).
+- [x] **main.ts** wires: scene + atmosphere + city + FPS + colliders + debug. Player spawns at random shelter. City update closure runs each frame for fire flicker + dust drift.
 - [x] `index.html`: mandatory Vibe Jam widget script, OG meta, mobile gate, boot screen.
-- [x] Docs: `CLAUDE.md` (this), `ARCHITECTURE.md`, `README.md`.
+- [x] Docs: `CLAUDE.md`, `ARCHITECTURE.md`, `README.md`.
+- [x] Production build verified: 141KB gzip total. No loading screen.
 
-## What is in progress (subagents)
-
-- [ ] **City Builder** — `src/world/{rng,palette,city,colliders}.ts`. Seeded RNG, ruined city generator (~250×250m), AABB colliders, 4 shelter positions, central landmark, fires, dust particles.
-- [ ] **Portal Integrator** — `src/world/portals.ts`. ESM port of `vibej.am/2026/portal/sample.js`. Lobby green exit + red arrival portals.
-- [ ] **PartyKit Server Skeleton** — `partykit/server.ts` + `src/net/{protocol,client}.ts`. Room with player/bot state, 10Hz broadcast, message types. Not yet hooked into the game loop.
-
-## What is next (after subagents return)
+## What is next
 
 In rough order:
-1. Integrate city into main loop, replace test boxes
-2. Wire AABB colliders into FPS controller
-3. Combat: weapon firing, hitscan raycasts, muzzle flash, reload, ammo crates as pickups
-4. Loot system: spawn loot in city, pickup interaction, backpack weight enforcement, drop
-5. Bot AI: drone (hover + shoot), sentry (ground patrol), hunter boss (center)
-6. Shelters: rotating extraction window (3-min cycle), 5-second hold, score banking
-7. Lobby + matchmaking UI: name, mode (PvE/PvP), squad code, deploy
-8. Multiplayer wire-up: client connects to PartyKit, position sync, remote players, networked bots/loot
-9. HUD: ammo, hp, backpack weight, score, extraction timer, announcements
-10. Audio: ambient, gunshot, hit, pickup, extraction siren, announce voice
-11. Polish: muzzle flash, hit sparks, kill confirms, particle trails, ui flourishes
-12. Deploy: Vercel (frontend) + PartyKit (server). Pre-flight: confirm widget present, instant load, no console errors.
-13. Submit.
+1. **Combat** (`src/systems/combat.ts`): weapon firing, hitscan via `raycastColliders`, muzzle flash sprite, reload timer, ammo accounting. Listens for `shoot` events.
+2. **Bot AI** (`src/systems/ai.ts` + `src/entities/bot.ts`): drone (hover + shoot), sentry (ground patrol), hunter boss (center). Simple state machines: idle → patrol → chase → attack → dead.
+3. **Loot** (`src/systems/loot.ts` + `src/entities/loot.ts`): spawn loot in city (seeded), pickup interaction (E key), backpack weight enforcement, drop (G key). Medkits + ammo crates as special loot.
+4. **Shelters / extraction** (`src/systems/extraction.ts` + `src/entities/shelter.ts`): rotating window (180s cycle, 60s open), 5s hold, score banking. `announce` events for "Shelter Bravo opening — 180s".
+5. **Lobby + portals integration** (`src/ui/lobby.ts`): name input, mode select (PvE/PvP), squad code, deploy button. Place vibej.am portals here. Show leaderboard preview.
+6. **HUD** (`src/ui/hud.ts`): ammo, hp, backpack weight, score, extraction timer, announcement banner, crosshair, kill feed.
+7. **Multiplayer wire-up**: client connects to PartyKit, sends inputs at 20Hz, receives state at 10Hz, spawns/updates remote players, bots authoritative on server.
+8. **Audio** (`src/audio/synth.ts`): procedural Web Audio (gunshot, hit, pickup, extraction siren, announce), small ambient sample.
+9. **Polish**: muzzle flash, hit sparks, kill confirm, particle trails, ui flourishes, intro animation.
+10. **Deploy**: Vercel (frontend) + PartyKit (server). Pre-flight: widget present, instant load, no console errors.
+11. **Submit** to vibej.am/2026.
 
 ## Game design (locked unless explicitly changed)
 
@@ -101,3 +98,4 @@ In rough order:
 | P | Atmosphere — pause |
 | [ / ] | Atmosphere — slow / fast |
 | R | Atmosphere — reset |
+| T | World — teleport to next shelter |

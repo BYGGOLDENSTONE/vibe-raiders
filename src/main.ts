@@ -2,6 +2,7 @@ import { Clock } from 'three';
 import { World } from './core/world';
 import { createSceneBundle } from './world/scene';
 import { createAtmosphere, PHASES } from './world/atmosphere';
+import { generateCity } from './world/city';
 import { createFpsController } from './systems/fps-controller';
 import { createLocalPlayer } from './entities/player';
 import { createDebugPanel, dbgRow, dbgBar } from './ui/debug';
@@ -16,14 +17,23 @@ const { renderer, scene, camera } = bundle;
 
 const atmosphere = createAtmosphere(bundle);
 
+const CITY_SEED = Math.floor(Math.random() * 1_000_000);
+const city = generateCity({ scene, seed: CITY_SEED });
+
+// Pick a random shelter as the spawn position. Y stays at ground (0).
+const spawnShelter = city.shelters[Math.floor(Math.random() * city.shelters.length)];
+const spawnPos = { x: spawnShelter.position[0], y: 0, z: spawnShelter.position[2] };
+
 const world = new World(scene);
-const player = createLocalPlayer({ spawn: { x: 0, y: 0, z: 8 } });
+const player = createLocalPlayer({ spawn: spawnPos });
 world.spawn(player);
 
 const fps = createFpsController({
   camera,
   domElement: canvas,
   player,
+  colliders: city.colliders,
+  worldHalfSize: 240,
 });
 
 const debug = createDebugPanel({ enabled: import.meta.env.DEV });
@@ -36,44 +46,35 @@ debug.addKey({
   label: 'next phase',
   group: 'atmosphere',
   fn: () => {
-    let t = atmosphereCurrentTime();
+    let t = atmosphereTimeRef;
     let cursor = t % atmosphere.totalCycleSec();
     for (const p of PHASES) {
       if (cursor < p.durationSec) { t += (p.durationSec - cursor) + 0.001; break; }
       cursor -= p.durationSec;
     }
     atmosphere.setTime(t);
-    setAtmosphereTime(t);
+    atmosphereTimeRef = t;
   },
 });
+debug.addKey({ key: 'KeyP', label: 'pause cycle', group: 'atmosphere', fn: () => { atmospherePaused = !atmospherePaused; } });
+debug.addKey({ key: 'BracketLeft', label: 'slow ÷2', group: 'atmosphere', fn: () => { atmosphereTimeScale = Math.max(0.125, atmosphereTimeScale / 2); } });
+debug.addKey({ key: 'BracketRight', label: 'fast ×2', group: 'atmosphere', fn: () => { atmosphereTimeScale = Math.min(64, atmosphereTimeScale * 2); } });
+debug.addKey({ key: 'KeyR', label: 'reset cycle', group: 'atmosphere', fn: () => { atmosphere.setTime(0); atmosphereTimeRef = 0; atmosphereTimeScale = 1; atmospherePaused = false; } });
+
 debug.addKey({
-  key: 'KeyP',
-  label: 'pause cycle',
-  group: 'atmosphere',
-  fn: () => { atmospherePaused = !atmospherePaused; },
-});
-debug.addKey({
-  key: 'BracketLeft',
-  label: 'slow ÷2',
-  group: 'atmosphere',
-  fn: () => { atmosphereTimeScale = Math.max(0.125, atmosphereTimeScale / 2); },
-});
-debug.addKey({
-  key: 'BracketRight',
-  label: 'fast ×2',
-  group: 'atmosphere',
-  fn: () => { atmosphereTimeScale = Math.min(64, atmosphereTimeScale * 2); },
-});
-debug.addKey({
-  key: 'KeyR',
-  label: 'reset cycle',
-  group: 'atmosphere',
-  fn: () => { atmosphere.setTime(0); setAtmosphereTime(0); atmosphereTimeScale = 1; atmospherePaused = false; },
+  key: 'KeyT',
+  label: 'tp to next shelter',
+  group: 'world',
+  fn: () => {
+    const idx = (city.shelters.findIndex(s => Math.abs(s.position[0] - player.object3d.position.x) < 5 && Math.abs(s.position[2] - player.object3d.position.z) < 5) + 1) % city.shelters.length;
+    const s = city.shelters[idx];
+    player.object3d.position.set(s.position[0], 0, s.position[2]);
+    const t = getComponent<TransformComponent>(player, C.Transform);
+    if (t) t.velocity.set(0, 0, 0);
+  },
 });
 
 let atmosphereTimeRef = 0;
-function atmosphereCurrentTime() { return atmosphereTimeRef; }
-function setAtmosphereTime(t: number) { atmosphereTimeRef = t; }
 
 let fpsAccum = 0; let fpsFrames = 0; let fpsValue = 0;
 
@@ -132,6 +133,20 @@ debug.addSection({
   },
 });
 
+debug.addSection({
+  id: 'world',
+  title: 'WORLD',
+  order: 3,
+  render: () => {
+    return (
+      dbgRow('seed', String(CITY_SEED)) +
+      dbgRow('shelters', String(city.shelters.length)) +
+      dbgRow('colliders', String(city.colliders.length)) +
+      dbgRow('landmark', `${city.landmark.kind}`)
+    );
+  },
+});
+
 debug.setStatus('dev');
 
 boot?.addEventListener('click', () => { fps.requestLock(); });
@@ -143,14 +158,18 @@ const onLockChange = () => {
 document.addEventListener('pointerlockchange', onLockChange);
 
 const clock = new Clock();
+let elapsed = 0;
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);
+  elapsed += dt;
 
   if (!atmospherePaused) {
     const scaled = dt * atmosphereTimeScale;
     atmosphere.update(scaled);
     atmosphereTimeRef += scaled;
   }
+
+  city.update?.(elapsed);
 
   fps.update(dt);
   world.tick(dt);
