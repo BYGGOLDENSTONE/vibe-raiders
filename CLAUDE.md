@@ -3,7 +3,7 @@
 > **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 7 complete. Wormhole transit is live — once the home system is fully claimed and `wormhole-transit` is bought, an auto-targeted "Open Rift" banner offers the closest unclaimed system at T2 (×100 multiplier, 5M/3M/2M cost). On claim, every planet in the target system enters `ownedPlanets` in one shot, and a violet vortex shader spins at both the home and the new system's stars (visible in galaxy + system view, billboard'd toward the camera, owner-coloured). Galaxy view also draws thin additive lines between connected systems for self + every remote player. Trade Hub (`trade-hub`) adds an HUD button that auto-trades 20% of the player's most-abundant resource for half as much of their least-abundant resource at a 2:1 ratio. In MP the relay matches a counterpart with `tradeHubReady=true` and informs both sides; offline / solo / no-counterpart falls back to a "Galactic Exchange" NPC. 60 s client cooldown + 30 s server safety net. T2 stops at one second system per the W7 design — T3+ deferred.
+> **Status:** Wave 8 complete — audio is live. WebAudio-synthesised SFX cover buy / annex / wormhole / trade / layer transition / click / error events; `Conquerer of the Universe.mp3` streams as background music through a music gain bus. Settings gear (bottom-right) opens a modal with Master / Music / SFX sliders + mute toggles, persisted to `vibecoder.audio.v1`. The audio context unlocks on the first user gesture (browser autoplay policy). Wave 7 — wormhole transit is live — once the home system is fully claimed and `wormhole-transit` is bought, an auto-targeted "Open Rift" banner offers the closest unclaimed system at T2 (×100 multiplier, 5M/3M/2M cost). On claim, every planet in the target system enters `ownedPlanets` in one shot, and a violet vortex shader spins at both the home and the new system's stars (visible in galaxy + system view, billboard'd toward the camera, owner-coloured). Galaxy view also draws thin additive lines between connected systems for self + every remote player. Trade Hub (`trade-hub`) adds an HUD button that auto-trades 20% of the player's most-abundant resource for half as much of their least-abundant resource at a 2:1 ratio. In MP the relay matches a counterpart with `tradeHubReady=true` and informs both sides; offline / solo / no-counterpart falls back to a "Galactic Exchange" NPC. 60 s client cooldown + 30 s server safety net. T2 stops at one second system per the W7 design — T3+ deferred.
 
 ---
 
@@ -242,6 +242,21 @@ The endgame milestones from W4-A's economy plan are now playable. Wormhole annex
 
 **Save:** still `vibecoder.empire.v6` / `vibecoder.empire.mp.v1`. No state shape change beyond `claimedSystems` already storing T2 entries; the wormhole flow only writes to fields that already existed. Old saves auto-heal as before.
 
+### Wave 8 — audio (this session)
+
+The first audio pass. SFX are 100 % WebAudio-synthesised (no asset files), per the locked tech rule. Background music is a single MP3 streamed through a `MediaElementAudioSourceNode` so the file never sits in memory all at once, and so the browser handles the codec.
+
+- **`src/audio/audio.ts`** — `AudioManager` singleton. Lazy `AudioContext` init on the first user gesture (`pointerdown` / `keydown` / `touchstart`, capture phase). Three gain buses: SFX → master, Music → master, master → destination. Settings (`masterVolume`, `musicVolume`, `sfxVolume` plus three mute flags) persisted to `localStorage` under `vibecoder.audio.v1`. Slider values are squared when applied to gain so the slider feels perceptually linear; mute flags multiply in cleanly so sliders keep their visual position while muted. 40 ms `linearRampToValueAtTime` on every gain change avoids zipper noise on slider drags.
+- **`src/audio/sfx.ts`** — seven prosedurel voices, each ~10–20 lines: `sfxClick`, `sfxBuy`, `sfxAnnex`, `sfxWormhole`, `sfxTrade`, `sfxLayerTransition`, `sfxError`. Built from `OscillatorNode` (sine/triangle/square/sawtooth) + envelope `GainNode` + optional biquad lowpass/highpass/bandpass. Tiny per-name cooldown table (e.g. 30 ms for click, 400 ms for wormhole) so rapid-fire clicks can't stack into a wall of voices. A single shared noise buffer (0.4 s of white noise) is reused for every noise-based call to avoid per-shot allocation.
+- **`src/audio/music.ts`** — single `HTMLAudioElement` pointed at `/music/conquerer.mp3`, looped, captured into the music bus via `createMediaElementSource`. First `play()` happens on every `audio.subscribe` notify (which fires on the first gesture); browsers reject auto-play attempts pre-gesture and the retry just absorbs that. 1.8 s linear fade-in on the music gain so the first note doesn't slap.
+- **`src/audio/settings-modal.ts`** — gear button anchored bottom-right. Click opens a centred modal with three rows (Master / Music / SFX), each with a 0–100 slider + mute checkbox. `audio.subscribe` keeps the modal in sync if settings change elsewhere. Esc and backdrop close. `sfxClick` fires on toggles so the player can hear the audio path is alive without changing other settings.
+- **MP3 location** — `public/music/conquerer.mp3` (Vite serves `public/` as `/`). 1.8 MB; one-time stream, never decoded into memory. The "no asset downloads" CLAUDE.md rule is bent **only for music**; every SFX is still procedural.
+- **Hooked events** — `vfx.ts` plays `sfxBuy` on successful `empire.buy()` and `sfxError` on a rejected purchase. `app.ts` plays `sfxAnnex` on `claimNextAnnex` + on outpost-moon click, `sfxWormhole` on `claimNextWormhole`, `sfxTrade` on every trade match (initiator + counterpart), `sfxError` on cooldown / no-stockpile, `sfxLayerTransition` on every `navigateTo` that actually changes the state. `hud.ts` plays `sfxClick` on the Upgrades launcher.
+
+**Files touched:** `src/audio/audio.ts` (new), `src/audio/sfx.ts` (new), `src/audio/music.ts` (new), `src/audio/settings-modal.ts` (new), `public/music/conquerer.mp3` (moved from repo root), `src/main.ts` (mount settings + start music after launch), `src/empire/vfx.ts` (sfxBuy/sfxError), `src/empire/hud.ts` (sfxClick on upgrades button), `src/galaxy/app.ts` (annex / wormhole / trade / layer-transition hooks), `src/style.css` (gear + modal + slider styles), `CLAUDE.md` (this entry).
+
+**Save:** new `localStorage` key `vibecoder.audio.v1`. Independent from the empire / session keys; clearing the change-profile session does not reset audio settings (intentional — the player's volume preference shouldn't snap back when they switch modes).
+
 ### Known issue — solved
 
 The "single-resource progression deadlock" from W3 is gone:
@@ -288,7 +303,10 @@ gamejam/
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts
-├── public/favicon.svg
+├── public/
+│   ├── favicon.svg
+│   └── music/
+│       └── conquerer.mp3           Wave-8 background music
 ├── src/
 │   ├── main.ts                     boot flow — incoming portal? saved session? start screen?
 │   ├── start-screen.ts             Wave-6 — Solo / Multiplayer chooser + profile picker
@@ -320,11 +338,16 @@ gamejam/
 │   │   ├── vfx.ts                  buy effects: drain particles, burst, UNLOCKED text, tier-card flash
 │   │   ├── surface.ts              Wave-3 — factory towers + drone swarm anchored to home planet
 │   │   └── moon-outpost.ts         Wave-4-B — dome on primary moon + tether + shuttles
-│   └── multiplayer/                Wave-6 client side
-│       ├── protocol.ts             wire types shared with partykit/server.ts
-│       ├── client.ts               partysocket wrapper — connection state, queueing, players cache
-│       ├── profile.ts              SessionConfig + 8-colour palette + auto-name
-│       └── leaderboard.ts          top-right chip list of remote players
+│   ├── multiplayer/                Wave-6 client side
+│   │   ├── protocol.ts             wire types shared with partykit/server.ts
+│   │   ├── client.ts               partysocket wrapper — connection state, queueing, players cache
+│   │   ├── profile.ts              SessionConfig + 8-colour palette + auto-name
+│   │   └── leaderboard.ts          top-right chip list of remote players
+│   └── audio/                      Wave-8 audio
+│       ├── audio.ts                AudioManager — context, gain buses, settings persist
+│       ├── sfx.ts                  procedural WebAudio SFX (buy / annex / wormhole / trade / …)
+│       ├── music.ts                MP3 streaming player wired into the music bus
+│       └── settings-modal.ts       gear button + Master / Music / SFX sliders
 └── node_modules/
 ```
 
@@ -356,6 +379,7 @@ gamejam/
 | **W5** | ✅ Complete. Auto-homeworld bootstrap on fresh save + System Expansion. Per-planet annex panel button later replaced by the W6-E single banner button. |
 | **W6** | ✅ Complete. PartyKit relay + start screen + per-slot spawn allocation + auto-annex banner + public ownership viz + Vibe Jam portal in/out. Debug panel removed. |
 | **W7** | ✅ Complete. Wormhole annex banner (`5M/3M/2M cost`, closest-unclaimed target, T2 ×100 multiplier on bulk-claim) + violet vortex shader at every connected system + galaxy-view connection lines per owner + Trade Hub auto-trade (2:1 most-abundant → least-abundant, 60 s cooldown, MP relay matchmaking with NPC fallback). |
+| **W8** | ✅ Complete. Procedural WebAudio SFX (buy / annex / wormhole / trade / layer transition / click / error) + MP3 background music streamed through a music gain bus + bottom-right gear button opening a Master / Music / SFX volume modal. Persists to `vibecoder.audio.v1`. Music auto-plays after the first user gesture (browser autoplay policy). |
 
 Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live constants: `PLANET_INCOME`, `SYNERGY_PER_PLANET = 0.2`, `SYSTEM_TIER_BASE = 100`, `MOON_OUTPOST_INCOME = 5/s crystal`, `BASE_STORAGE_CAP = 1500`, `PROD_MUL_PER_TIER`, milestone costs in `src/empire/upgrades.ts` `expSteps`. W5 annex: `SYSTEM_PLANET_CLAIM_BASE = {metal:5000, water:3000, crystal:2000}`, `SYSTEM_PLANET_CLAIM_GROWTH = 1.6` in `src/empire/empire.ts`. W7 wormhole: `WORMHOLE_CLAIM_COST = {metal:5M, water:3M, crystal:2M}` in `src/empire/empire.ts`. W7 trade: 20% give / 50% return (2:1 ratio), 60 s client cooldown / 30 s server in `partykit/server.ts:TRADE_COOLDOWN_MS`. Wave 4-B visuals: `DOME_DIAMETER_FRAC`, `TETHER_RADIUS_FRAC`, `SHUTTLE_COUNT`, `SHUTTLE_BASE_SPEED` in `src/empire/moon-outpost.ts`.
 
@@ -373,3 +397,4 @@ Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live co
   - `vibecoder.mp.session.v1` — current mode + profile + optional `portalRef`. Cleared by the "↻ change profile" link.
   - `vibecoder.mp.playerId.v1` — stable per-browser identity for the relay. Reusing this means refresh keeps the same spawn system and owned planets.
   - `vibecoder.empire.panelWidth.v2` — legacy panel width (unused after W2 redesign, can be deleted).
+  - `vibecoder.audio.v1` — Wave-8 audio settings (master / music / SFX volume + mute flags). Independent from session reset.

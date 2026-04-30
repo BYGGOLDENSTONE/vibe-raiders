@@ -9,6 +9,7 @@ import {
   type ResourceBag,
   type ResourceKey,
 } from './types';
+import { sfxClick } from '../audio/sfx';
 
 interface ChipDom {
   root: HTMLDivElement;
@@ -78,7 +79,10 @@ export class ResourceHUD {
       <span class="em-hud-btn-label">Upgrades</span>
       <span class="em-hud-btn-count" data-count>0/0</span>
     `;
-    this.button.addEventListener('click', () => this.panel.toggle());
+    this.button.addEventListener('click', () => {
+      sfxClick();
+      this.panel.toggle();
+    });
     this.root.appendChild(this.button);
     this.buttonCount = this.button.querySelector('[data-count]') as HTMLSpanElement;
 

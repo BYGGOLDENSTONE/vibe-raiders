@@ -34,6 +34,14 @@ import {
   disposeWormhole,
   type WormholeHandle,
 } from './wormhole';
+import {
+  sfxAnnex,
+  sfxClick,
+  sfxError,
+  sfxLayerTransition,
+  sfxTrade,
+  sfxWormhole,
+} from '../audio/sfx';
 
 const GALAXY_SEED = 20260430;
 
@@ -223,6 +231,7 @@ export class App {
       // the outpost moon (when applicable). Otherwise moons aren't navigable.
       if (kind === 'moon' && mnId && this.empire.needsOutpostMoonChoice()) {
         this.empire.claimOutpostMoon(mnId);
+        sfxAnnex();
         return;
       }
       if (kind === 'system') {
@@ -325,6 +334,10 @@ export class App {
 
   navigateTo(next: LayerState): void {
     if (this.controller.isTransitioning()) return;
+    if (next.kind !== this.state.kind || next.systemId !== this.state.systemId
+        || next.planetId !== this.state.planetId) {
+      sfxLayerTransition();
+    }
 
     const preset = this.layerPreset(next);
     const { pos, node } = this.resolveTarget(next);
@@ -485,6 +498,7 @@ export class App {
         const before = this.empire.nextAnnexTarget();
         if (!before) return;
         if (this.empire.claimNextAnnex()) {
+          sfxAnnex();
           // Camera-drift to the freshly claimed planet so the player sees
           // their new asset spin into the rotation. Use the captured target
           // since the next call will return a different planet.
@@ -493,6 +507,8 @@ export class App {
             systemId: this.empire.state.homeSystemId,
             planetId: before.id,
           });
+        } else {
+          sfxError();
         }
       },
       nextWormhole,
@@ -500,6 +516,7 @@ export class App {
         const before = this.empire.nextWormholeTarget();
         if (!before) return;
         if (this.empire.claimNextWormhole()) {
+          sfxWormhole();
           // Fly the player into the freshly claimed system so the vortex
           // visual lands in view immediately and the new T2 multiplier
           // reads as a tangible reward.
@@ -508,6 +525,8 @@ export class App {
             systemId: before.id,
             planetId: null,
           });
+        } else {
+          sfxError();
         }
       },
     };
@@ -765,9 +784,11 @@ export class App {
         if (asInitiator) {
           const swap = this.empire.executeTrade();
           if (swap) {
+            sfxTrade();
             this.showTradeToast(counterpartName, counterpartColor, swap);
           }
         } else {
+          sfxTrade();
           this.showTradeNotice(counterpartName, counterpartColor);
         }
       },
@@ -778,6 +799,7 @@ export class App {
         if (reason === 'no-counterpart') {
           this.runNpcTrade();
         } else {
+          sfxError();
           this.showTradeStatus('Trade hub cooling down — try again in a moment.');
         }
       },
@@ -840,7 +862,11 @@ export class App {
   // immediately so the player always gets feedback from the click.
   private handleTradeClick(): void {
     if (!this.empire.hasUnlock('trade-hub')) return;
-    if (Date.now() < this.tradeCooldownUntil) return;
+    if (Date.now() < this.tradeCooldownUntil) {
+      sfxError();
+      return;
+    }
+    sfxClick();
     // Tentatively start the cooldown so the button is visibly disabled while
     // we're waiting on the relay. If the trade fails for cooldown reasons
     // (server rate-limit), the toast tells the player to wait.
@@ -857,9 +883,11 @@ export class App {
   private runNpcTrade(): void {
     const swap = this.empire.executeTrade();
     if (!swap) {
+      sfxError();
       this.showTradeStatus('Not enough stockpile to trade — keep producing.');
       return;
     }
+    sfxTrade();
     this.showTradeToast('Galactic Exchange', '#9be8ff', swap);
   }
 

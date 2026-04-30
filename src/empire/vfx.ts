@@ -4,6 +4,7 @@
 
 import type { Empire } from './empire';
 import { RESOURCE_COLOR, type ResourceKey, type UpgradeNode } from './types';
+import { sfxBuy, sfxError } from '../audio/sfx';
 
 function ensureFxLayer(): HTMLDivElement {
   let el = document.getElementById('fx-layer') as HTMLDivElement | null;
@@ -171,7 +172,11 @@ export function buyWithVfx(
 
   // Buy now — this triggers the panel to rebuild via empire.subscribe.
   const ok = empire.buy(node.id);
-  if (!ok) return;
+  if (!ok) {
+    sfxError();
+    return;
+  }
+  sfxBuy();
 
   // Burst + UNLOCKED text fire immediately at the click point. The tier card
   // gets rebuilt by the panel refresh, so we look up the new card by node id

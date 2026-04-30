@@ -8,6 +8,8 @@ import {
   parseIncomingPortal,
   sessionFromPortal,
 } from './portal';
+import { startMusic } from './audio/music';
+import { mountSettings } from './audio/settings-modal';
 
 const host = document.getElementById('app') as HTMLDivElement | null;
 if (!host) throw new Error('#app container not found');
@@ -52,4 +54,9 @@ function launch(config: SessionConfig): void {
     clearSession();
     window.location.reload();
   });
+  // Audio: settings gear (bottom-right) + background music. Music waits for
+  // the first user gesture before actually playing (browser autoplay policy);
+  // wiring it up here means it's ready the moment the player clicks anywhere.
+  mountSettings(host!);
+  startMusic();
 }

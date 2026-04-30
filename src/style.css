@@ -1663,3 +1663,183 @@ html, body {
   font-size: 14px;
   text-shadow: 0 0 10px rgba(157, 108, 255, 0.7);
 }
+
+/* ---------- Audio settings (gear button + modal) ---------- */
+.settings-gear {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  z-index: 9;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--gx-panel-bg);
+  border: 1px solid var(--gx-panel-border);
+  border-radius: 999px;
+  color: var(--gx-fg-dim);
+  font-family: inherit;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  transition: color 140ms, border-color 140ms, background 140ms, transform 140ms;
+}
+.settings-gear:hover {
+  color: #fff;
+  border-color: var(--gx-panel-border-strong);
+  background: rgba(126, 200, 255, 0.12);
+  transform: rotate(28deg);
+}
+.settings-gear-ico {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.settings-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease-out;
+}
+.settings-modal.settings-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.settings-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 4, 10, 0.55);
+  backdrop-filter: blur(2px);
+}
+.settings-card {
+  position: relative;
+  z-index: 1;
+  width: min(360px, 92vw);
+  background: var(--gx-panel-bg-strong);
+  border: 1px solid var(--gx-panel-border-strong);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  transform: translateY(8px) scale(0.98);
+  transition: transform 200ms ease-out;
+}
+.settings-modal.settings-open .settings-card {
+  transform: translateY(0) scale(1);
+}
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--gx-panel-border);
+}
+.settings-title {
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--gx-fg);
+  font-weight: 600;
+}
+.settings-close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--gx-fg-dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  transition: color 120ms;
+}
+.settings-close:hover { color: #fff; }
+
+.settings-body {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+}
+.settings-label {
+  color: var(--gx-fg);
+  letter-spacing: 0.06em;
+}
+.settings-value {
+  color: var(--gx-fg-dim);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+.settings-row-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.settings-slider {
+  flex: 1;
+  appearance: none;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+.settings-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #7ec8ff;
+  border: 2px solid rgba(8, 10, 18, 0.9);
+  box-shadow: 0 0 8px rgba(126, 200, 255, 0.5);
+  cursor: pointer;
+}
+.settings-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #7ec8ff;
+  border: 2px solid rgba(8, 10, 18, 0.9);
+  box-shadow: 0 0 8px rgba(126, 200, 255, 0.5);
+  cursor: pointer;
+}
+.settings-mute {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gx-fg-faint);
+  cursor: pointer;
+  user-select: none;
+}
+.settings-mute input { accent-color: #7ec8ff; cursor: pointer; }
+.settings-row-muted .settings-slider { opacity: 0.4; }
+.settings-row-muted .settings-label { color: var(--gx-fg-faint); }
+
+.settings-foot {
+  padding: 8px 18px 14px;
+  border-top: 1px solid var(--gx-panel-border);
+  text-align: center;
+}
+.settings-hint {
+  font-size: 10px;
+  color: var(--gx-fg-faint);
+  letter-spacing: 0.04em;
+}
