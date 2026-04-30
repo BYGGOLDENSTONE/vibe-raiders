@@ -23,10 +23,10 @@ const PARTY_LABEL_COLOR = '#f0d080'; // gold for party members
 const NORMAL_LABEL_COLOR = '#d8dde4'; // pale text otherwise
 const SMOOTHING = 0.15;
 
-const LABEL_STYLE_ID = 'dusk-mp-label-style';
+const LABEL_STYLE_ID = 'mp-label-style';
 
 const LABEL_CSS = `
-.dusk-mp-label {
+.mp-label {
   position: absolute;
   transform: translate(-50%, -100%);
   pointer-events: auto;
@@ -44,12 +44,12 @@ const LABEL_CSS = `
   user-select: none;
   z-index: 10;
 }
-.dusk-mp-label.dusk-mp-party {
+.mp-label.mp-party {
   color: ${PARTY_LABEL_COLOR};
   border-color: rgba(200,160,96,0.7);
   text-shadow: 0 1px 2px #000, 0 0 6px rgba(200,160,96,0.6);
 }
-.dusk-mp-label-tag {
+.mp-label-tag {
   display: inline-block;
   width: 8px;
   height: 8px;
@@ -177,8 +177,8 @@ export class GhostManager {
       g.label.style.top = sy.toFixed(1) + 'px';
 
       const isParty = partyIds.has(g.id);
-      if (isParty) g.label.classList.add('dusk-mp-party');
-      else g.label.classList.remove('dusk-mp-party');
+      if (isParty) g.label.classList.add('mp-party');
+      else g.label.classList.remove('mp-party');
     }
   }
 
@@ -204,11 +204,11 @@ export class GhostManager {
     this.scene.add(mesh);
 
     const label = document.createElement('div');
-    label.className = 'dusk-mp-label';
+    label.className = 'mp-label';
     label.dataset.ghostId = state.id;
 
     const swatch = document.createElement('span');
-    swatch.className = 'dusk-mp-label-tag';
+    swatch.className = 'mp-label-tag';
     swatch.style.background = '#' + state.color.toString(16).padStart(6, '0');
     label.appendChild(swatch);
 

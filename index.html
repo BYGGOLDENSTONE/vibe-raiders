@@ -4,17 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Game Jam</title>
-    <meta name="theme-color" content="#101418" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#0a0c14" />
 
     <style>
-      :root { color-scheme: dark; }
+      :root {
+        color-scheme: dark;
+        --bg: #0a0c14;
+        --fg: #d8dde4;
+      }
       * { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+      html, body {
+        margin: 0; padding: 0; height: 100%; overflow: hidden;
+      }
       body {
-        background: #101418;
-        color: #d8dde4;
-        font-family: 'JetBrains Mono', 'Consolas', 'Menlo', monospace;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: 'Inter', system-ui, sans-serif;
         font-size: 14px;
         user-select: none;
         -webkit-user-select: none;
@@ -36,34 +41,11 @@
       }
       #ui-root > * { pointer-events: auto; }
 
-      #boot {
-        position: fixed;
-        inset: 0;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        background: #0a0d10;
-        z-index: 100;
-      }
-      #boot h1 {
-        font-size: 36px;
-        margin: 0;
-        letter-spacing: 0.3em;
-        color: #d8dde4;
-      }
-      #boot .hint {
-        margin-top: 24px;
-        color: #6a7480;
-        font-size: 11px;
-        letter-spacing: 0.2em;
-      }
-
       #mobile-warn {
         display: none;
         position: fixed;
         inset: 0;
-        background: #101418;
+        background: var(--bg);
         z-index: 1000;
         padding: 32px;
         text-align: center;
@@ -72,12 +54,18 @@
         justify-content: center;
         gap: 16px;
       }
-      #mobile-warn h2 { color: #d8dde4; margin: 0; letter-spacing: 0.2em; }
-      #mobile-warn p { color: #6a7480; max-width: 320px; line-height: 1.6; }
+      #mobile-warn h2 {
+        margin: 0;
+        letter-spacing: 0.32em;
+      }
+      #mobile-warn p {
+        max-width: 320px;
+        line-height: 1.6;
+      }
 
       @media (hover: none) and (pointer: coarse), (max-width: 768px) {
         #mobile-warn { display: flex; }
-        #app, #boot { display: none; }
+        #app { display: none; }
       }
     </style>
   </head>
@@ -85,10 +73,6 @@
     <div id="app">
       <canvas id="game-canvas"></canvas>
       <div id="ui-root"></div>
-      <div id="boot">
-        <h1>GAME JAM</h1>
-        <div class="hint">loading…</div>
-      </div>
     </div>
 
     <div id="mobile-warn">

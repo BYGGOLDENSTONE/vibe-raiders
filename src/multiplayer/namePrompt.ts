@@ -1,24 +1,21 @@
 // Brief bottom-center "Your name?" prompt shown on first connect when no
 // stored name exists. Resolves with whatever the player typed (or a fallback).
-//
 // Non-blocking: the rest of the game keeps running while the prompt is up.
 // Escape or 2s of inactivity → fallback.
 
 import { generateRandomName, persistName } from './identity';
 
-const STYLE_ID = 'dusk-mp-name-style';
+const STYLE_ID = 'mp-name-style';
 
 const CSS = `
-.dusk-mp-name {
+.mp-name-prompt {
   position: fixed;
   bottom: 110px;
   left: 50%;
   transform: translateX(-50%);
-  background: linear-gradient(180deg, rgba(10,10,13,0.94) 0%, rgba(6,6,9,0.98) 100%);
-  border: 1px solid #4a3820;
-  box-shadow:
-    inset 0 0 0 1px rgba(200,160,96,0.08),
-    0 4px 14px rgba(0,0,0,0.6);
+  background: rgba(8,10,14,0.94);
+  border: 1px solid rgba(120,130,150,0.3);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.6);
   padding: 8px 14px;
   display: flex;
   flex-direction: column;
@@ -28,17 +25,17 @@ const CSS = `
   color: #d8dde4;
   z-index: 30;
   pointer-events: auto;
-  border-radius: 2px;
+  border-radius: 3px;
 }
-.dusk-mp-name-label {
+.mp-name-prompt-label {
   font-size: 10px;
   letter-spacing: 0.32em;
   color: #c8a060;
   text-transform: uppercase;
 }
-.dusk-mp-name input {
+.mp-name-prompt input {
   background: #08080a;
-  border: 1px solid #2a2014;
+  border: 1px solid #2a2f3a;
   color: #e8d8b0;
   font: inherit;
   font-size: 13px;
@@ -48,8 +45,8 @@ const CSS = `
   outline: none;
   text-align: center;
 }
-.dusk-mp-name input:focus { border-color: #c8a060; }
-.dusk-mp-name-hint {
+.mp-name-prompt input:focus { border-color: #c8a060; }
+.mp-name-prompt-hint {
   font-size: 9px;
   color: #6a7480;
   letter-spacing: 0.2em;
@@ -69,9 +66,9 @@ export function promptForName(uiRoot: HTMLElement, timeoutMs = 2000): Promise<st
 
   return new Promise<string>((resolve) => {
     const wrap = document.createElement('div');
-    wrap.className = 'dusk-mp-name';
+    wrap.className = 'mp-name-prompt';
     const label = document.createElement('div');
-    label.className = 'dusk-mp-name-label';
+    label.className = 'mp-name-prompt-label';
     label.textContent = 'Your name?';
     const input = document.createElement('input');
     input.type = 'text';
@@ -80,7 +77,7 @@ export function promptForName(uiRoot: HTMLElement, timeoutMs = 2000): Promise<st
     input.autocomplete = 'off';
     input.spellcheck = false;
     const hint = document.createElement('div');
-    hint.className = 'dusk-mp-name-hint';
+    hint.className = 'mp-name-prompt-hint';
     hint.textContent = 'Enter to confirm · Esc to skip';
     wrap.appendChild(label);
     wrap.appendChild(input);
@@ -112,10 +109,8 @@ export function promptForName(uiRoot: HTMLElement, timeoutMs = 2000): Promise<st
     };
     input.addEventListener('keydown', onKey);
 
-    // Auto-focus so the player can just start typing.
     setTimeout(() => { try { input.focus(); } catch { /* noop */ } }, 30);
 
-    // Timeout — if the player hasn't typed anything, fall back silently.
     setTimeout(() => {
       if (!typed) finish('');
     }, timeoutMs);

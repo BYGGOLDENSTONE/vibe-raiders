@@ -1,33 +1,28 @@
-// Wave 4: Vibe Jam 2026 webring portal entry/exit.
-// Renders an "outbound" arch that links to vibej.am/portal/2026 and, when the
-// player arrives via ?portal=true, a "return" arch that links back to ?ref.
-//
-// Reuses the dungeon's portal rig builder (src/game/dungeons/portals.ts) for
-// visuals so the jam portals match DUSK's gothic aesthetic with a different
-// tint palette.
+// Vibe Jam 2026 webring portal — entry/exit arches.
+// Self-contained: builds its own torus + label, no dependency on game modules.
+// Reads ?portal=true&ref=...&username=...&color=... so visitors arriving from
+// another jam game land near the return arch with their identity carried over.
 
-import { Vector3 } from 'three';
+import {
+  Color,
+  Mesh,
+  MeshBasicMaterial,
+  Object3D,
+  PointLight,
+  TorusGeometry,
+  Vector3,
+} from 'three';
 import type { GameContext } from '../state';
 import { gameState } from '../state';
-import { COLORS } from '../constants';
-import {
-  buildPortal,
-  tickPortal,
-  updatePortalLabel,
-  type PortalRig,
-} from '../dungeons/portals';
-import { C, type PlayerComponent } from '../../core/components';
 
 const VIBE_JAM_BASE = 'https://vibej.am/portal/2026';
 const TRIGGER_RADIUS = 1.8;
-const PORTAL_Y = 0;
-const NAME_KEY = 'dusk:name';
+const PORTAL_Y = 1.4;
+const NAME_KEY = 'gamejam:name';
 
-// Tints picked to read as "jam exit" (gold/yellow) and "return arch" (cyan).
 const OUTBOUND_COLOR = 0xffc040;
 const RETURN_COLOR = 0x40e0ff;
 
-// Two candidate slots; we shift the outbound one if the return arch occupies it.
 const SLOT_A = new Vector3(-15, PORTAL_Y, -15);
 const SLOT_B = new Vector3(15, PORTAL_Y, -15);
 
@@ -36,17 +31,10 @@ interface PortalArrival {
   ref: string | null;
   username: string | null;
   color: string | null;
-  speed: number | null;
 }
 
 function parseArrival(): PortalArrival {
-  const out: PortalArrival = {
-    arrived: false,
-    ref: null,
-    username: null,
-    color: null,
-    speed: null,
-  };
+  const out: PortalArrival = { arrived: false, ref: null, username: null, color: null };
   try {
     const params = new URLSearchParams(window.location.search);
     out.arrived = params.get('portal') === 'true';
@@ -56,13 +44,8 @@ function parseArrival(): PortalArrival {
     if (u) out.username = u.slice(0, 24);
     const c = params.get('color');
     if (c) out.color = c;
-    const s = params.get('speed');
-    if (s) {
-      const n = Number(s);
-      if (Number.isFinite(n)) out.speed = n;
-    }
   } catch {
-    // ignore — fall through with default empty arrival
+    // ignore
   }
   return out;
 }
@@ -84,14 +67,6 @@ function hostnameOf(s: string): string {
   }
 }
 
-function colorParamToHex(raw: string): number | null {
-  let h = raw.trim();
-  if (h.startsWith('#')) h = h.slice(1);
-  if (h.startsWith('0x') || h.startsWith('0X')) h = h.slice(2);
-  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
-  return parseInt(h, 16);
-}
-
 function hexToCssHex(n: number): string {
   return n.toString(16).padStart(6, '0');
 }
@@ -108,7 +83,6 @@ function flashScreen(durationMs: number, tint: string): void {
     'z-index: 9999',
   ].join(';');
   document.body.appendChild(el);
-  // Force reflow then fade in.
   void el.offsetWidth;
   el.style.opacity = '0.85';
   window.setTimeout(() => {
@@ -116,6 +90,48 @@ function flashScreen(durationMs: number, tint: string): void {
     el.style.opacity = '0';
     window.setTimeout(() => el.remove(), 200);
   }, Math.max(0, durationMs - 150));
+}
+
+interface PortalRig {
+  group: Object3D;
+  ring: Mesh;
+  light: PointLight;
+  label: HTMLElement;
+}
+
+function buildPortalRig(pos: Vector3, color: number, name: string, uiRoot: HTMLElement): PortalRig {
+  const group = new Object3D();
+  group.position.copy(pos);
+
+  const mat = new MeshBasicMaterial({ color });
+  const ring = new Mesh(new TorusGeometry(1.4, 0.18, 16, 48), mat);
+  group.add(ring);
+
+  const light = new PointLight(color, 1.4, 8);
+  group.add(light);
+
+  const label = document.createElement('div');
+  label.textContent = name;
+  label.style.cssText = [
+    'position: absolute',
+    'transform: translate(-50%, -100%)',
+    'pointer-events: auto',
+    'cursor: pointer',
+    "font-family: 'JetBrains Mono', monospace",
+    'font-size: 11px',
+    'letter-spacing: 0.22em',
+    'padding: 4px 10px',
+    `color: #${hexToCssHex(color)}`,
+    'background: rgba(0,0,0,0.6)',
+    `border: 1px solid #${hexToCssHex(color)}`,
+    'border-radius: 2px',
+    'z-index: 10',
+    'white-space: nowrap',
+    'user-select: none',
+  ].join(';');
+  uiRoot.appendChild(label);
+
+  return { group, ring, light, label };
 }
 
 interface PortalSlot {
@@ -128,50 +144,17 @@ interface PortalSlot {
 export function initPortal(ctx: GameContext): void {
   const arrival = parseArrival();
 
-  // Apply identity from query params BEFORE mp module reads localStorage.
-  if (arrival.arrived) {
-    if (arrival.username) {
-      try {
-        localStorage.setItem(NAME_KEY, arrival.username);
-      } catch {
-        // ignore
-      }
-    }
-
-    const player = gameState.player;
-    if (player) {
-      const pc = player.components.get(C.Player) as PlayerComponent | undefined;
-      if (pc) {
-        if (arrival.username) pc.name = arrival.username;
-        if (arrival.color) {
-          const hex = colorParamToHex(arrival.color);
-          if (hex !== null) pc.color = hex;
-        }
-      }
-      // Drop player near the return arch slot so they spawn in the welcome area.
-      const yKeep = player.object3d.position.y;
-      player.object3d.position.set(SLOT_A.x + 3, yKeep, SLOT_A.z + 3);
-    }
+  if (arrival.arrived && arrival.username) {
+    try { localStorage.setItem(NAME_KEY, arrival.username); } catch { /* ignore */ }
   }
 
-  // Decide slot positions. Return portal claims SLOT_A; outbound shifts to SLOT_B.
   const useReturn = arrival.arrived && arrival.ref !== null;
   const outboundPos = useReturn ? SLOT_B : SLOT_A;
   const returnPos = SLOT_A;
 
   const slots: PortalSlot[] = [];
 
-  // Outbound — always present.
-  const outboundRig = buildPortal(
-    {
-      position: outboundPos,
-      color: OUTBOUND_COLOR,
-      name: 'VIBE JAM',
-      state: 'active',
-      facingY: Math.PI, // face roughly toward origin
-    },
-    ctx.uiRoot,
-  );
+  const outboundRig = buildPortalRig(outboundPos, OUTBOUND_COLOR, 'VIBE JAM', ctx.uiRoot);
   ctx.scene.add(outboundRig.group);
 
   const outboundSlot: PortalSlot = {
@@ -181,63 +164,29 @@ export function initPortal(ctx: GameContext): void {
     onTrigger: () => {
       if (outboundSlot.triggered) return;
       outboundSlot.triggered = true;
-      const player = gameState.player;
       let name = 'Wanderer';
       try {
         const stored = localStorage.getItem(NAME_KEY);
         if (stored) name = stored;
-      } catch {
-        // ignore
-      }
-      let colorHex: number = COLORS.player;
-      if (player) {
-        const pc = player.components.get(C.Player) as PlayerComponent | undefined;
-        if (pc) {
-          if (pc.name) name = pc.name;
-          colorHex = pc.color;
-        }
-      }
+      } catch { /* ignore */ }
+      const colorHex = OUTBOUND_COLOR;
       const ourUrl = window.location.origin + window.location.pathname;
       const url =
         VIBE_JAM_BASE +
-        '?username=' +
-        encodeURIComponent(name) +
-        '&color=' +
-        encodeURIComponent(hexToCssHex(colorHex)) +
+        '?username=' + encodeURIComponent(name) +
+        '&color=' + encodeURIComponent(hexToCssHex(colorHex)) +
         '&speed=8' +
-        '&ref=' +
-        encodeURIComponent(ourUrl);
-      try {
-        ctx.world.emit('audio:sfx', { id: 'portal-travel' });
-      } catch {
-        // audio module may not be wired; fine.
-      }
+        '&ref=' + encodeURIComponent(ourUrl);
       flashScreen(300, '#ffc040');
-      window.setTimeout(() => {
-        window.location.href = url;
-      }, 280);
+      window.setTimeout(() => { window.location.href = url; }, 280);
     },
   };
   slots.push(outboundSlot);
-
-  // Make the outbound clickable.
-  outboundRig.label.style.pointerEvents = 'auto';
-  outboundRig.label.style.cursor = 'pointer';
   outboundRig.label.addEventListener('click', outboundSlot.onTrigger);
 
-  // Return — only if we have a valid ref.
   if (useReturn && arrival.ref) {
     const refHost = hostnameOf(arrival.ref);
-    const returnRig = buildPortal(
-      {
-        position: returnPos,
-        color: RETURN_COLOR,
-        name: 'BACK TO ' + refHost.toUpperCase(),
-        state: 'active',
-        facingY: Math.PI,
-      },
-      ctx.uiRoot,
-    );
+    const returnRig = buildPortalRig(returnPos, RETURN_COLOR, 'BACK TO ' + refHost.toUpperCase(), ctx.uiRoot);
     ctx.scene.add(returnRig.group);
 
     const returnSlot: PortalSlot = {
@@ -247,31 +196,45 @@ export function initPortal(ctx: GameContext): void {
       onTrigger: () => {
         if (returnSlot.triggered) return;
         returnSlot.triggered = true;
-        try {
-          ctx.world.emit('audio:sfx', { id: 'portal-travel' });
-        } catch {
-          // ignore
-        }
         flashScreen(300, '#40e0ff');
-        window.setTimeout(() => {
-          window.location.href = arrival.ref as string;
-        }, 280);
+        window.setTimeout(() => { window.location.href = arrival.ref as string; }, 280);
       },
     };
     slots.push(returnSlot);
-
-    returnRig.label.style.pointerEvents = 'auto';
-    returnRig.label.style.cursor = 'pointer';
     returnRig.label.addEventListener('click', returnSlot.onTrigger);
   }
 
-  // Per-frame: spin discs, pulse glyphs, project labels, check proximity.
+  // Per-frame: spin rings, project labels, proximity-trigger if a player exists.
+  const tmp = new Vector3();
+  const tintColor = new Color();
   ctx.world.addSystem((_w, frameCtx) => {
+    const w = ctx.canvas.clientWidth || window.innerWidth;
+    const h = ctx.canvas.clientHeight || window.innerHeight;
+    const pulse = 0.85 + Math.sin(frameCtx.elapsed * 2.4) * 0.15;
     const player = gameState.player;
     const ppos = player ? player.object3d.position : null;
+
     for (const slot of slots) {
-      tickPortal(slot.rig, frameCtx.elapsed, frameCtx.dt);
-      updatePortalLabel(slot.rig, ctx.camera, ctx.canvas);
+      slot.rig.ring.rotation.z += frameCtx.dt * 0.6;
+      slot.rig.light.intensity = 1.2 + pulse * 0.6;
+
+      tmp.copy(slot.pos);
+      tmp.y += 1.6;
+      tmp.project(ctx.camera);
+      const onScreen =
+        tmp.z > -1 && tmp.z < 1 &&
+        tmp.x > -1.2 && tmp.x < 1.2 &&
+        tmp.y > -1.2 && tmp.y < 1.2;
+      if (!onScreen) {
+        slot.rig.label.style.display = 'none';
+      } else {
+        slot.rig.label.style.display = '';
+        const sx = (tmp.x * 0.5 + 0.5) * w;
+        const sy = (1 - (tmp.y * 0.5 + 0.5)) * h;
+        slot.rig.label.style.left = sx.toFixed(1) + 'px';
+        slot.rig.label.style.top = sy.toFixed(1) + 'px';
+      }
+
       if (!slot.triggered && ppos) {
         const dx = ppos.x - slot.pos.x;
         const dz = ppos.z - slot.pos.z;
@@ -280,5 +243,6 @@ export function initPortal(ctx: GameContext): void {
         }
       }
     }
+    void tintColor;
   });
 }

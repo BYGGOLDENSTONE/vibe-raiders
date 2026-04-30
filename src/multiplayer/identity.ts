@@ -1,22 +1,21 @@
 // Local identity helpers — username + derived color, persisted in localStorage.
 // Multiplayer uses a stable name across sessions so visiting judges see the same wanderer.
 
-const NAME_KEY = 'dusk:name';
+const NAME_KEY = 'gamejam:name';
 
-// Gothic palette — warm browns, pale gold, dim purple, ember red, slate blue.
 // Color is picked deterministically from the username so the same name always
 // renders with the same hue.
 const PALETTE: number[] = [
-  0xc8a060, // pale gold
-  0x8a6a30, // warm brown
-  0x6a4ec8, // dim purple
-  0xc04040, // ember red
-  0x5a78c8, // slate blue
-  0x8a9080, // sage
-  0xb89070, // tan
-  0x9a4870, // wine
-  0x4a8060, // moss
-  0xa07050, // bronze
+  0xc8a060,
+  0x8a6a30,
+  0x6a4ec8,
+  0xc04040,
+  0x5a78c8,
+  0x8a9080,
+  0xb89070,
+  0x9a4870,
+  0x4a8060,
+  0xa07050,
 ];
 
 function hashString(s: string): number {
