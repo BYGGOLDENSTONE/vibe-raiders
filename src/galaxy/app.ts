@@ -9,6 +9,7 @@ import { UI } from './ui';
 import { Empire } from '../empire/empire';
 import { ResourceHUD } from '../empire/hud';
 import { UpgradePanel } from '../empire/panel';
+import { DebugPanel } from '../empire/debug';
 
 const GALAXY_SEED = 20260430;
 
@@ -99,6 +100,7 @@ export class App {
     // owns the launcher button.
     this.upgradePanel = new UpgradePanel(this.overlay, this.empire);
     this.hud = new ResourceHUD(this.overlay, this.empire, this.upgradePanel);
+    new DebugPanel(this.overlay, this.empire);
     this.empire.subscribe(() => {
       this.upgradePanel.refresh();
       this.hud.refresh();
@@ -295,6 +297,7 @@ export class App {
     //    happens inside Empire.
     this.empire.tick(dt);
     this.hud.update(dt);
+    this.upgradePanel.tickLive(performance.now());
 
     // 1. Advance the world first. Slow galactic rotation around the central
     //    black hole (~10 min/revolution), then planet/moon orbits.

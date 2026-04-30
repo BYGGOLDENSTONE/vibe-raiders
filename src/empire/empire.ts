@@ -180,7 +180,11 @@ export class Empire {
   tick(dt: number): void {
     const m = this.computeMetrics();
     for (const k of RESOURCE_KEYS) {
-      const next = this.state.resources[k] + m.rates[k] * dt;
+      const cur = this.state.resources[k];
+      // Cap acts as a production ceiling — once we're at or above cap (e.g.
+      // from a debug grant), tick stops accruing but doesn't claw stock back.
+      if (cur >= m.caps[k]) continue;
+      const next = cur + m.rates[k] * dt;
       this.state.resources[k] = Math.min(m.caps[k], next);
     }
     this.saveAccum += dt;
@@ -201,6 +205,17 @@ export class Empire {
 
   reset(): void {
     this.state = createFreshEmpire(this.galaxy, this.seed);
+    this.save();
+    this.emit();
+  }
+
+  // Debug-only: drop `amount` into every resource, bypassing storage caps.
+  // Tick treats the cap as a production ceiling (it stops *accruing* at cap)
+  // rather than a hard upper bound, so debug-granted excess is preserved.
+  grantAll(amount: number): void {
+    for (const k of RESOURCE_KEYS) {
+      this.state.resources[k] += amount;
+    }
     this.save();
     this.emit();
   }

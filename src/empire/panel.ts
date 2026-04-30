@@ -1,61 +1,90 @@
-// Upgrade modal — full-screen overlay with a pannable skill-tree canvas.
-// The catalogue radiates from a central "Empire Core" node:
-//   UP    : Expansion chain
-//   RIGHT : Production fan
-//   LEFT  : Logistics
-//   DOWN  : Drones
-//   UP    : Tech (above the production fan)
-// Edges are drawn with SVG; nodes are absolutely-positioned divs.
+// Upgrade modal — Branch Browser layout: a left-rail of category-grouped
+// chains and a right detail pane that shows the active chain's tier cards.
+// No panning, no spatial graph — every chain is reachable in one click.
 
 import type { Empire } from './empire';
-import { CORE_NODE_ID, UPGRADE_NODES, catalogueExtent } from './upgrades';
+import { NODES_BY_ID, UPGRADE_NODES } from './upgrades';
+import { buyWithVfx } from './vfx';
 import {
   RESOURCE_COLOR,
   RESOURCE_KEYS,
   RESOURCE_LABEL,
+  type ResourceBag,
+  type ResourceKey,
   type UpgradeCategory,
   type UpgradeNode,
 } from './types';
 
-const NODE_W = 124;
-const NODE_H = 56;
+const CATEGORY_ORDER: UpgradeCategory[] = [
+  'expansion',
+  'production',
+  'drones',
+  'logistics',
+  'tech',
+];
 
-const CATEGORY_COLOR: Record<UpgradeCategory, string> = {
-  expansion:  '#7ec8ff',
-  production: '#9bd64a',
-  drones:     '#f0a560',
-  logistics:  '#a9b3c4',
-  tech:       '#c89bff',
+const CATEGORY_META: Record<UpgradeCategory, { label: string; icon: string; color: string }> = {
+  expansion:  { label: 'Expansion',  icon: '✦', color: '#7ec8ff' },
+  production: { label: 'Production', icon: '◈', color: '#9bd64a' },
+  drones:     { label: 'Drones',     icon: '➤', color: '#f0a560' },
+  logistics:  { label: 'Logistics',  icon: '▦', color: '#a9b3c4' },
+  tech:       { label: 'Tech',       icon: '✧', color: '#c89bff' },
 };
 
-interface NodeDom {
-  root: HTMLDivElement;
-  node: UpgradeNode;
+interface Chain {
+  key: string;
+  name: string;
+  category: UpgradeCategory;
+  nodes: UpgradeNode[];
 }
+
+// Group catalogue nodes into chains keyed by their semantic family.
+// Mirrors the design prototype's buildChains, but typed.
+function buildChains(): Chain[] {
+  const map = new Map<string, Chain>();
+  for (const n of UPGRADE_NODES) {
+    if (n.id === 'core') continue;
+    let key: string;
+    if (n.id.startsWith('unlock-')) {
+      key = 'expansion';
+    } else if (n.id.startsWith('prod-') && n.id.includes('-rate-')) {
+      key = `mining-${n.id.split('-')[1]}`;
+    } else if (n.id.startsWith('prod-') && n.id.includes('-mul-')) {
+      key = `opt-${n.id.split('-')[1]}`;
+    } else {
+      key = n.id.replace(/-\d+$/, '');
+    }
+    let chain = map.get(key);
+    if (!chain) {
+      chain = { key, name: n.name, category: n.category, nodes: [] };
+      map.set(key, chain);
+    }
+    chain.nodes.push(n);
+  }
+  for (const c of map.values()) {
+    c.nodes.sort((a, b) => a.tierLabel.localeCompare(b.tierLabel));
+  }
+  return [...map.values()];
+}
+
+const CHAINS: Chain[] = buildChains();
 
 export class UpgradePanel {
   private modal: HTMLDivElement;
-  private viewport: HTMLDivElement;
-  private worldDiv: HTMLDivElement;
-  private edgesSvg: SVGSVGElement;
-  private edgesGroup: SVGGElement;
+  private rail: HTMLDivElement;
+  private detail: HTMLDivElement;
+  private counter: HTMLElement;
   private empire: Empire;
-  private nodes = new Map<string, NodeDom>();
   private opened = false;
   private listeners = new Set<() => void>();
-
-  // Pan state
-  private panX = 0;
-  private panY = 0;
-  private isDragging = false;
-  private dragStartX = 0;
-  private dragStartY = 0;
-  private dragStartPanX = 0;
-  private dragStartPanY = 0;
-  private dragMoved = false;
+  private activeKey: string;
+  private lastLiveRefresh = 0;
 
   constructor(parent: HTMLElement, empire: Empire) {
     this.empire = empire;
+    // Default to first non-empty chain.
+    this.activeKey = CHAINS[0]?.key ?? '';
+
     this.modal = document.createElement('div');
     this.modal.className = 'em-modal';
     this.modal.hidden = true;
@@ -65,28 +94,22 @@ export class UpgradePanel {
         <header class="em-modal-head">
           <div class="em-modal-title">Empire Upgrades</div>
           <div class="em-modal-count" data-count>0 / 0</div>
-          <div class="em-modal-hint">Drag to pan · click an unlocked node to buy</div>
+          <div class="em-modal-hint">Pick a branch on the left, then buy tiers in order.</div>
           <button class="em-modal-close" data-close aria-label="Close">×</button>
         </header>
         <div class="em-modal-body">
-          <div class="em-tree-viewport" data-viewport></div>
+          <div class="branch-browser">
+            <div class="bb-rail" data-rail></div>
+            <div class="bb-detail" data-detail></div>
+          </div>
         </div>
       </div>
     `;
     parent.appendChild(this.modal);
-    this.viewport = this.modal.querySelector('[data-viewport]') as HTMLDivElement;
 
-    // SVG layer for edges (sits behind nodes, panned together)
-    this.edgesSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    this.edgesSvg.classList.add('em-tree-edges');
-    this.edgesGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    this.edgesSvg.appendChild(this.edgesGroup);
-    this.viewport.appendChild(this.edgesSvg);
-
-    // Div world for nodes
-    this.worldDiv = document.createElement('div');
-    this.worldDiv.className = 'em-tree-world';
-    this.viewport.appendChild(this.worldDiv);
+    this.rail = this.modal.querySelector('[data-rail]') as HTMLDivElement;
+    this.detail = this.modal.querySelector('[data-detail]') as HTMLDivElement;
+    this.counter = this.modal.querySelector('[data-count]') as HTMLElement;
 
     this.modal.querySelectorAll('[data-close]').forEach((el) => {
       el.addEventListener('click', () => this.close());
@@ -95,22 +118,17 @@ export class UpgradePanel {
       if (e.key === 'Escape' && this.opened) this.close();
     });
 
-    this.buildEdges();
-    this.buildNodes();
-    this.installPan();
-
     this.refresh();
   }
 
   // --- Open/close ----------------------------------------------------------
 
   isOpen(): boolean { return this.opened; }
+
   open(): void {
     this.modal.hidden = false;
     this.opened = true;
     this.refresh();
-    // Defer the recenter to next frame so the viewport has its final size.
-    requestAnimationFrame(() => this.recenter());
     this.emit();
   }
   close(): void {
@@ -128,183 +146,238 @@ export class UpgradePanel {
     for (const fn of this.listeners) fn();
   }
 
-  // --- Build graph ---------------------------------------------------------
+  // --- Render --------------------------------------------------------------
 
-  private buildEdges(): void {
-    for (const node of UPGRADE_NODES) {
-      if (!node.prereq) continue;
-      const src = UPGRADE_NODES.find((n) => n.id === node.prereq);
-      if (!src) continue;
-      const x1 = src.x + NODE_W / 2;
-      const y1 = src.y + NODE_H / 2;
-      const x2 = node.x + NODE_W / 2;
-      const y2 = node.y + NODE_H / 2;
-      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      // Strictly orthogonal routing: straight line if axially aligned,
-      // L-shape (one 90° turn) otherwise. Horizontal-first when the chain
-      // lives mostly to one side; vertical-first otherwise. Never diagonal.
-      let d: string;
-      if (x1 === x2 || y1 === y2) {
-        d = `M ${x1} ${y1} L ${x2} ${y2}`;
-      } else if (Math.abs(x2 - x1) >= Math.abs(y2 - y1)) {
-        // Wide step: go horizontal first, then vertical to target.
-        d = `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2}`;
-      } else {
-        // Tall step: go vertical first, then horizontal to target.
-        d = `M ${x1} ${y1} L ${x1} ${y2} L ${x2} ${y2}`;
-      }
-      path.setAttribute('d', d);
-      path.setAttribute('class', 'em-tree-edge');
-      path.dataset.from = src.id;
-      path.dataset.to = node.id;
-      this.edgesGroup.appendChild(path);
-    }
-    // Size the SVG to encompass the whole catalogue (with margin).
-    const ext = catalogueExtent();
-    const margin = 200;
-    const w = ext.maxX - ext.minX + NODE_W + margin * 2;
-    const h = ext.maxY - ext.minY + NODE_H + margin * 2;
-    this.edgesSvg.setAttribute('viewBox', `${ext.minX - margin} ${ext.minY - margin} ${w} ${h}`);
-    this.edgesSvg.style.width = `${w}px`;
-    this.edgesSvg.style.height = `${h}px`;
-    this.edgesSvg.style.left = `${ext.minX - margin}px`;
-    this.edgesSvg.style.top = `${ext.minY - margin}px`;
+  // Throttled live refresh — runs while the modal is open so cost pills and
+  // ETAs reflect the still-ticking economy. The game doesn't pause when the
+  // modal opens (it can't — this is a multiplayer game).
+  tickLive(now: number): void {
+    if (!this.opened) return;
+    if (now - this.lastLiveRefresh < 250) return;
+    this.lastLiveRefresh = now;
+    this.refresh();
   }
-
-  private buildNodes(): void {
-    for (const node of UPGRADE_NODES) {
-      const div = document.createElement('div');
-      div.className = `em-tree-node em-tree-node-${node.category}`;
-      div.style.left = `${node.x}px`;
-      div.style.top = `${node.y}px`;
-      div.style.width = `${NODE_W}px`;
-      div.style.height = `${NODE_H}px`;
-      div.style.setProperty('--cat', CATEGORY_COLOR[node.category]);
-      div.dataset.id = node.id;
-      // The Core gets a different look — the centre of the empire.
-      if (node.id === CORE_NODE_ID) div.classList.add('em-tree-node-core');
-      div.innerHTML = `
-        <div class="em-node-head">
-          <span class="em-node-name"></span>
-          <span class="em-node-tier"></span>
-        </div>
-        <div class="em-node-effect"></div>
-        <div class="em-node-cost" data-cost></div>
-      `;
-      (div.querySelector('.em-node-name') as HTMLElement).textContent = node.name;
-      (div.querySelector('.em-node-tier') as HTMLElement).textContent = node.tierLabel;
-      (div.querySelector('.em-node-effect') as HTMLElement).textContent = node.description;
-      div.title = `${node.name} ${node.tierLabel}`;
-      div.addEventListener('click', () => {
-        if (this.dragMoved) return;
-        if (this.empire.canBuy(node)) {
-          this.empire.buy(node.id);
-          this.refresh();
-        }
-      });
-      this.worldDiv.appendChild(div);
-      this.nodes.set(node.id, { root: div, node });
-    }
-  }
-
-  // --- Pan -----------------------------------------------------------------
-
-  private installPan(): void {
-    // Pointer capture is acquired *only* once the user moves past the drag
-    // threshold. Capturing on pointerdown swallows the node's synthetic click
-    // event, which manifests as "I tap a node and nothing happens".
-    let pending = false;
-    this.viewport.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
-      pending = true;
-      this.isDragging = false;
-      this.dragMoved = false;
-      this.dragStartX = e.clientX;
-      this.dragStartY = e.clientY;
-      this.dragStartPanX = this.panX;
-      this.dragStartPanY = this.panY;
-    });
-    this.viewport.addEventListener('pointermove', (e) => {
-      if (!pending && !this.isDragging) return;
-      const dx = e.clientX - this.dragStartX;
-      const dy = e.clientY - this.dragStartY;
-      if (!this.isDragging && Math.abs(dx) + Math.abs(dy) > 4) {
-        this.isDragging = true;
-        this.dragMoved = true;
-        try { this.viewport.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-      }
-      if (this.isDragging) {
-        this.panX = this.dragStartPanX + dx;
-        this.panY = this.dragStartPanY + dy;
-        this.applyPan();
-      }
-    });
-    const finish = (e: PointerEvent): void => {
-      pending = false;
-      if (this.isDragging) {
-        this.isDragging = false;
-        try { this.viewport.releasePointerCapture(e.pointerId); } catch { /* released */ }
-      }
-    };
-    this.viewport.addEventListener('pointerup', finish);
-    this.viewport.addEventListener('pointercancel', finish);
-  }
-
-  private applyPan(): void {
-    this.worldDiv.style.transform = `translate(${this.panX}px, ${this.panY}px)`;
-    this.edgesSvg.style.transform = `translate(${this.panX}px, ${this.panY}px)`;
-  }
-
-  // Centre the viewport on the Core node when the modal opens.
-  private recenter(): void {
-    const target = UPGRADE_NODES.find((n) => n.id === CORE_NODE_ID);
-    if (!target) return;
-    const vw = this.viewport.clientWidth || 800;
-    const vh = this.viewport.clientHeight || 500;
-    this.panX = vw / 2 - (target.x + NODE_W / 2);
-    this.panY = vh / 2 - (target.y + NODE_H / 2);
-    this.applyPan();
-  }
-
-  // --- Refresh -------------------------------------------------------------
 
   refresh(): void {
-    const counter = this.modal.querySelector('[data-count]') as HTMLElement | null;
-    if (counter) {
-      // Subtract the always-owned core from the counter so it reads naturally.
-      const owned = Math.max(0, this.empire.state.unlockedNodes.length - 1);
-      const total = UPGRADE_NODES.length - 1;
-      counter.textContent = `${owned} / ${total} owned`;
+    // Preserve scroll across the rebuild so the user doesn't get yanked back
+    // to the top when the panel re-renders mid-scroll.
+    const railScroll = this.rail.scrollTop;
+    const detailScroll = this.detail.scrollTop;
+
+    const owned = Math.max(0, this.empire.state.unlockedNodes.length - 1);
+    const total = UPGRADE_NODES.length - 1;
+    this.counter.textContent = `${owned} / ${total} owned`;
+
+    // Visible chains, grouped by category in CATEGORY_ORDER.
+    const visibleChains: { chain: Chain; visible: UpgradeNode[] }[] = [];
+    for (const chain of CHAINS) {
+      const visible = chain.nodes.filter((n) => this.empire.isVisible(n));
+      if (visible.length === 0) continue;
+      visibleChains.push({ chain, visible });
+    }
+    // If the active chain is no longer visible, fall back to the first visible.
+    if (!visibleChains.find((c) => c.chain.key === this.activeKey)) {
+      this.activeKey = visibleChains[0]?.chain.key ?? '';
     }
 
-    for (const { root: el, node } of this.nodes.values()) {
-      const status = this.empire.nodeStatus(node);
-      el.classList.toggle('em-node-owned', status === 'owned');
-      el.classList.toggle('em-node-ready', status === 'available');
-      el.classList.toggle('em-node-locked', status === 'locked');
-      el.classList.toggle('em-node-hidden', status === 'hidden');
+    this.renderRail(visibleChains);
+    this.renderDetail(visibleChains);
 
-      const costEl = el.querySelector('[data-cost]') as HTMLElement;
-      if (status === 'owned' || node.id === CORE_NODE_ID) {
-        costEl.innerHTML = '';
-      } else {
-        costEl.innerHTML = renderCost(node.cost, this.empire.state.resources);
+    this.rail.scrollTop = railScroll;
+    this.detail.scrollTop = detailScroll;
+  }
+
+  private renderRail(visible: { chain: Chain; visible: UpgradeNode[] }[]): void {
+    this.rail.innerHTML = '';
+    for (const cat of CATEGORY_ORDER) {
+      const chains = visible.filter((c) => c.chain.category === cat);
+      if (chains.length === 0) continue;
+      const meta = CATEGORY_META[cat];
+
+      const head = document.createElement('div');
+      head.className = 'bb-cat';
+      head.style.setProperty('--c', meta.color);
+      head.innerHTML = `<span class="ico">${meta.icon}</span>${meta.label}`;
+      this.rail.appendChild(head);
+
+      for (const { chain, visible: vNodes } of chains) {
+        const ownedN = vNodes.filter((n) => this.empire.hasNode(n.id)).length;
+        const totalN = vNodes.length;
+        const hasReady = vNodes.some((n) => this.empire.nodeStatus(n) === 'available');
+
+        const row = document.createElement('div');
+        row.className = 'bb-chain';
+        if (chain.key === this.activeKey) row.classList.add('active');
+        row.style.setProperty('--c', meta.color);
+        row.innerHTML = `
+          <div class="bb-chain-bar">
+            <div class="bb-chain-bar-fill"></div>
+          </div>
+          <div class="bb-chain-name"></div>
+          <div class="bb-chain-progress mono"></div>
+        `;
+        (row.querySelector('.bb-chain-bar-fill') as HTMLElement).style.width =
+          `${(ownedN / totalN) * 100}%`;
+        (row.querySelector('.bb-chain-name') as HTMLElement).textContent = chain.name;
+        (row.querySelector('.bb-chain-progress') as HTMLElement).textContent =
+          `${ownedN}/${totalN}${hasReady ? ' ●' : ''}`;
+        row.addEventListener('click', () => {
+          this.activeKey = chain.key;
+          this.refresh();
+        });
+        this.rail.appendChild(row);
+      }
+    }
+  }
+
+  private renderDetail(visible: { chain: Chain; visible: UpgradeNode[] }[]): void {
+    this.detail.innerHTML = '';
+    const active = visible.find((c) => c.chain.key === this.activeKey);
+    if (!active) {
+      const empty = document.createElement('div');
+      empty.className = 'bb-empty';
+      empty.textContent = 'No branches available yet — claim a producing planet first.';
+      this.detail.appendChild(empty);
+      return;
+    }
+    const { chain, visible: vNodes } = active;
+    const meta = CATEGORY_META[chain.category];
+    this.detail.style.setProperty('--c', meta.color);
+
+    const ownedN = vNodes.filter((n) => this.empire.hasNode(n.id)).length;
+    const totalN = vNodes.length;
+    const next = vNodes.find((n) => !this.empire.hasNode(n.id));
+    const metrics = this.empire.computeMetrics();
+
+    // Header
+    const head = document.createElement('div');
+    head.className = 'bb-head';
+    head.innerHTML = `
+      <div class="bb-head-ico">${meta.icon}</div>
+      <div class="bb-head-body">
+        <div class="bb-head-eyebrow">${meta.label} chain</div>
+        <div class="bb-head-title"></div>
+        <div class="bb-head-desc">A ${totalN}-tier chain. Each tier compounds on the previous — buy in order from ${vNodes[0]!.tierLabel} to ${vNodes[vNodes.length - 1]!.tierLabel}.</div>
+        <div class="bb-head-stats" data-stats></div>
+      </div>
+    `;
+    (head.querySelector('.bb-head-title') as HTMLElement).textContent = chain.name;
+
+    const stats = head.querySelector('[data-stats]') as HTMLElement;
+    stats.appendChild(this.buildStat('Progress', `${ownedN}/${totalN}`, true));
+    if (next) {
+      stats.appendChild(this.buildStat('Next tier', `${next.tierLabel} · ${next.description}`, false));
+      const ready = canAffordNow(this.empire.state.resources, next.cost);
+      const eta = ready ? 'Ready' : formatEta(etaFor(next.cost, this.empire.state.resources, metrics.rates));
+      const stat = this.buildStat('ETA', eta, true);
+      const v = stat.querySelector('.v') as HTMLElement;
+      v.style.color = ready ? '#7adf9c' : '';
+      stats.appendChild(stat);
+    }
+    this.detail.appendChild(head);
+
+    // Tier list
+    const list = document.createElement('div');
+    list.className = 'bb-tier-list';
+    for (const node of vNodes) {
+      list.appendChild(this.buildTierCard(node, meta.color, metrics.rates));
+    }
+    this.detail.appendChild(list);
+  }
+
+  private buildStat(k: string, v: string, mono: boolean): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'bb-head-stat';
+    el.innerHTML = `<div class="k"></div><div class="v${mono ? ' mono' : ''}"></div>`;
+    (el.querySelector('.k') as HTMLElement).textContent = k;
+    (el.querySelector('.v') as HTMLElement).textContent = v;
+    return el;
+  }
+
+  private buildTierCard(node: UpgradeNode, color: string, rates: ResourceBag): HTMLElement {
+    const status = this.empire.nodeStatus(node);
+    const card = document.createElement('div');
+    card.className = 'bb-tier';
+    card.dataset.nodeId = node.id;
+    card.style.setProperty('--c', color);
+    if (status === 'owned') card.classList.add('owned');
+    else if (status === 'available') card.classList.add('ready');
+    else card.classList.add('locked');
+
+    card.innerHTML = `
+      <div class="bb-tier-num"></div>
+      <div class="bb-tier-body">
+        <div class="bb-tier-name"></div>
+        <div class="bb-tier-effect"></div>
+        <div class="bb-tier-prereq" data-prereq hidden></div>
+      </div>
+      <div class="bb-tier-costs" data-costs></div>
+      <button class="bb-tier-buy" type="button"></button>
+    `;
+    (card.querySelector('.bb-tier-num') as HTMLElement).textContent = node.tierLabel;
+    (card.querySelector('.bb-tier-name') as HTMLElement).textContent = `${node.name} ${node.tierLabel}`;
+    (card.querySelector('.bb-tier-effect') as HTMLElement).textContent = node.description;
+
+    // When the node is gated by a prereq node we haven't bought yet, surface
+    // *which* node so the player isn't left guessing why "Locked" appeared.
+    const prereqMissing = node.prereq && !this.empire.hasNode(node.prereq);
+    if (prereqMissing) {
+      const pre = NODES_BY_ID.get(node.prereq!);
+      if (pre) {
+        const hint = card.querySelector('[data-prereq]') as HTMLElement;
+        hint.hidden = false;
+        hint.textContent = `Requires ${pre.name} ${pre.tierLabel}`;
       }
     }
 
-    // Edge highlighting
-    this.edgesGroup.querySelectorAll('.em-tree-edge').forEach((line) => {
-      const path = line as SVGPathElement;
-      const from = path.dataset.from ?? '';
-      const to = path.dataset.to ?? '';
-      const fromOwned = this.empire.hasNode(from);
-      const toOwned = this.empire.hasNode(to);
-      path.classList.toggle('em-tree-edge-active', fromOwned && toOwned);
-      path.classList.toggle('em-tree-edge-ready', fromOwned && !toOwned);
-    });
+    const costsEl = card.querySelector('[data-costs]') as HTMLElement;
+    if (status === 'owned') {
+      const span = document.createElement('span');
+      span.className = 'bb-tier-active';
+      span.textContent = 'Active';
+      costsEl.appendChild(span);
+    } else {
+      for (const k of RESOURCE_KEYS) {
+        const need = node.cost[k];
+        if (need === undefined) continue;
+        const has = this.empire.state.resources[k];
+        const enough = has >= need;
+        const pill = document.createElement('span');
+        pill.className = `bb-cost-pill ${enough ? 'ok' : 'short'}`;
+        pill.style.setProperty('--c', RESOURCE_COLOR[k]);
+        pill.title = RESOURCE_LABEL[k];
+        pill.innerHTML = `<span class="bb-cost-dot"></span><span></span>`;
+        (pill.querySelector('span:last-child') as HTMLElement).textContent =
+          `${fmtCost(has)}/${fmtCost(need)}`;
+        costsEl.appendChild(pill);
+      }
+    }
+
+    const btn = card.querySelector('.bb-tier-buy') as HTMLButtonElement;
+    if (status === 'owned') {
+      btn.classList.add('owned');
+      btn.disabled = true;
+      btn.textContent = '✓ Owned';
+    } else if (status === 'available') {
+      btn.textContent = 'Buy';
+      btn.addEventListener('click', () => {
+        // Buy is synchronous; empire.subscribe drives the panel refresh.
+        buyWithVfx(this.empire, node, btn, color);
+      });
+    } else {
+      btn.disabled = true;
+      if (prereqMissing) {
+        btn.textContent = 'Locked';
+      } else {
+        const sec = etaFor(node.cost, this.empire.state.resources, rates);
+        btn.textContent = formatEta(sec);
+      }
+    }
+    return card;
   }
 
-  // For the HUD button
+  // --- HUD button helpers --------------------------------------------------
+
   ownedCount(): number {
     return Math.max(0, this.empire.state.unlockedNodes.length - 1);
   }
@@ -320,19 +393,46 @@ export class UpgradePanel {
 
 // --- Helpers ---------------------------------------------------------------
 
-function renderCost(cost: Partial<Record<string, number>>, have: Record<string, number>): string {
-  const parts: string[] = [];
+function fmtCost(v: number): string {
+  return v < 10 ? v.toFixed(1) : Math.ceil(v).toString();
+}
+
+function canAffordNow(have: ResourceBag, cost: Partial<Record<ResourceKey, number>>): boolean {
   for (const k of RESOURCE_KEYS) {
     const need = cost[k];
     if (need === undefined) continue;
-    const has = have[k] ?? 0;
-    const enough = has >= need;
-    const display = need < 10 ? need.toFixed(1) : Math.ceil(need).toString();
-    parts.push(
-      `<span class="em-cost-pill ${enough ? '' : 'short'}" style="--c:${RESOURCE_COLOR[k]}" title="${RESOURCE_LABEL[k]}">` +
-      `<span class="em-cost-dot"></span>${display}` +
-      `</span>`,
-    );
+    if (have[k] < need) return false;
   }
-  return parts.join('');
+  return true;
 }
+
+function etaFor(
+  cost: Partial<Record<ResourceKey, number>>,
+  have: ResourceBag,
+  rates: ResourceBag,
+): number {
+  let max = 0;
+  for (const k of RESOURCE_KEYS) {
+    const need = cost[k];
+    if (need === undefined) continue;
+    const missing = need - have[k];
+    if (missing <= 0) continue;
+    const rate = rates[k];
+    if (rate <= 0.001) return Infinity;
+    const t = missing / rate;
+    if (t > max) max = t;
+  }
+  return max;
+}
+
+function formatEta(sec: number): string {
+  if (sec <= 0) return 'now';
+  if (!isFinite(sec)) return '—';
+  if (sec < 60) return `${Math.ceil(sec)}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${Math.ceil(sec % 60)}s`;
+  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+}
+
+// Used by NODES_BY_ID lookup elsewhere — keep import alive in case empire/buy
+// path indirectly resolves through this file. (Empire.buy uses NODES_BY_ID.)
+void NODES_BY_ID;

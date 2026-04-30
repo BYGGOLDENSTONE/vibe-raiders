@@ -65,6 +65,7 @@ export class ResourceHUD {
     const chip = document.createElement('div');
     chip.className = 'em-chip';
     chip.title = RESOURCE_LABEL[k];
+    chip.dataset.resource = k;
     chip.style.setProperty('--c', RESOURCE_COLOR[k]);
     chip.innerHTML = `
       <span class="em-chip-dot"></span>
