@@ -14,6 +14,14 @@ interface Label {
   el: HTMLDivElement;
   colorDot: HTMLSpanElement;
   textEl: HTMLSpanElement;
+  baseText: string;  // unprefixed name, kept so home markers can re-render cleanly
+}
+
+export interface HomeMarkerOpts {
+  homePlanetId: string;
+  homeSystemId: string;
+  ownedPlanets: Set<string>;
+  homeSystemFullyClaimed: boolean;
 }
 
 function tempVec(): THREE.Vector3 { return new THREE.Vector3(); }
@@ -114,7 +122,34 @@ export class LabelManager {
       el,
       colorDot: dot,
       textEl: text,
+      baseText: p.text,
     });
+  }
+
+  // Update home/owned markers on existing labels. Idempotent — re-renders the
+  // text from cached baseText each call, then re-prefixes per current state.
+  // Call this after build() and whenever the empire's owned-planets set changes.
+  markHome(opts: HomeMarkerOpts): void {
+    for (const l of this.labels) {
+      let kind: 'home-planet' | 'home-system-full' | 'home-system-partial' | 'owned-planet' | null = null;
+      if (l.kind === 'planet' && l.planetId === opts.homePlanetId) {
+        kind = 'home-planet';
+      } else if (l.kind === 'planet' && l.planetId && opts.ownedPlanets.has(l.planetId)) {
+        kind = 'owned-planet';
+      } else if (l.kind === 'system' && l.systemId === opts.homeSystemId) {
+        kind = opts.homeSystemFullyClaimed ? 'home-system-full' : 'home-system-partial';
+      }
+
+      let prefix = '';
+      switch (kind) {
+        case 'home-planet':         prefix = '★ HOME · '; break;
+        case 'home-system-full':    prefix = '★★ HOME SYSTEM · '; break;
+        case 'home-system-partial': prefix = '★ HOME · '; break;
+        case 'owned-planet':        prefix = '✓ '; break;
+      }
+      l.textEl.textContent = prefix + l.baseText;
+      l.el.dataset.home = kind ?? '';
+    }
   }
 
   update(layer: LayerState, width: number, height: number): void {

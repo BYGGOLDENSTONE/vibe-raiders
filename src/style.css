@@ -173,6 +173,44 @@ html, body {
   background: rgba(126, 200, 255, 0.18);
   color: #fff;
 }
+.gx-home-btn {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  background: var(--gx-panel-bg);
+  border: 1px solid rgba(255, 212, 122, 0.45);
+  border-radius: 999px;
+  color: #ffd47a;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: background 140ms, border-color 140ms, transform 140ms;
+}
+.gx-home-btn:hover:not(:disabled) {
+  background: rgba(255, 212, 122, 0.16);
+  border-color: rgba(255, 212, 122, 0.75);
+  transform: translateY(-1px);
+}
+.gx-home-btn:disabled {
+  color: var(--gx-fg-faint);
+  border-color: rgba(255, 255, 255, 0.08);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.gx-home-ico {
+  font-size: 14px;
+  line-height: 1;
+  color: #ffd47a;
+}
+.gx-home-btn:disabled .gx-home-ico { color: var(--gx-fg-faint); }
+
 .gx-switch-btn:disabled {
   color: var(--gx-fg-faint);
   cursor: not-allowed;

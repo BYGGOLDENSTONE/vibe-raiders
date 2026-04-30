@@ -30,47 +30,62 @@ const grid = (col: number, row: number): { x: number; y: number } => ({ x: col *
 
 // --- Cost helpers ----------------------------------------------------------
 
-function escalatedCost(resource: ResourceKey, base: number, growth: number, t: number): Partial<ResourceBag> {
-  return { [resource]: Math.round(base * Math.pow(growth, t) * 10) / 10 } as Partial<ResourceBag>;
-}
 function blendedCost(p: ResourceKey, pb: number, s: ResourceKey, sb: number, growth: number, t: number): Partial<ResourceBag> {
   const m = Math.pow(growth, t);
   const c: Partial<ResourceBag> = {};
   c[p] = Math.round(pb * m * 10) / 10;
-  c[s] = Math.round(sb * m * 10) / 10;
+  // When the secondary resource matches the primary, accumulate instead of
+  // overwriting (otherwise sb=0 would zero out the primary cost).
+  if (sb > 0) {
+    c[s] = (c[s] ?? 0) + Math.round(sb * m * 10) / 10;
+  }
   return c;
+}
+
+// Tier-aware cost for west chains. Every player starts with rocky home
+// (metal + water income), so Tier I-III costs are payable from the home
+// resources alone. Tier IV-VI add crystal — by then the player has bought
+// Phase 2 (Moon Outpost), and moons drip crystal income.
+function tieredCost(metalBase: number, growth: number, t: number): Partial<ResourceBag> {
+  const m = Math.pow(growth, t);
+  const out: Partial<ResourceBag> = {
+    metal: Math.round(metalBase * m * 10) / 10,
+    water: Math.round(metalBase * 0.5 * m * 10) / 10,
+  };
+  if (t >= 3) {
+    out.crystal = Math.round(metalBase * 0.3 * m * 10) / 10;
+  }
+  return out;
 }
 
 interface ProdRecipe {
   resource: ResourceKey;
-  miningName: string;
-  optName: string;
-  flavour: string;
+  name: string;
 }
 const PRODUCTION_RECIPES: ProdRecipe[] = [
-  { resource: 'metal',    miningName: 'Metal Mining',      optName: 'Metal Optimisation',      flavour: 'ore'         },
-  { resource: 'water',    miningName: 'Water Pumping',     optName: 'Hydro Optimisation',      flavour: 'flow'        },
-  { resource: 'gas',      miningName: 'Gas Refining',      optName: 'Gas Optimisation',        flavour: 'pressure'    },
-  { resource: 'crystal',  miningName: 'Crystal Lab',       optName: 'Crystal Optimisation',    flavour: 'lattice'     },
-  { resource: 'plasma',   miningName: 'Plasma Extraction', optName: 'Plasma Optimisation',     flavour: 'core temp'   },
-  { resource: 'silicon',  miningName: 'Silicon Works',     optName: 'Silicon Optimisation',    flavour: 'wafer yield' },
-  { resource: 'chemical', miningName: 'Chemical Plant',    optName: 'Chemical Optimisation',   flavour: 'reaction'    },
+  { resource: 'metal',    name: 'Metal Refinery'   },
+  { resource: 'water',    name: 'Water Pumping'    },
+  { resource: 'gas',      name: 'Gas Compression'  },
+  { resource: 'crystal',  name: 'Crystal Lab'      },
+  { resource: 'plasma',   name: 'Plasma Extraction'},
+  { resource: 'silicon',  name: 'Silicon Works'    },
+  { resource: 'chemical', name: 'Chemical Plant'   },
 ];
 
-const PROD_RATE_PER_TIER = [0.4, 0.6, 0.9, 1.4, 2.1, 3.2];
-const PROD_MUL_PER_TIER  = [0.20, 0.25, 0.30, 0.35, 0.40, 0.50];
+// Big multipliers — the new economy has planet income as the flat baseline,
+// so production upgrades are pure boost. Sum of tiers ≈ ×16.5 per resource.
+const PROD_MUL_PER_TIER  = [0.25, 0.50, 1.00, 2.00, 4.00, 8.00];
 
-// Per-resource lane assignment. Mining lane on row N, optimisation on row N+1.
-// Resources alternate above and below row 0 for visual balance and so the
-// player's eye stays close to Core for early game.
-const PROD_ROWS: Record<ResourceKey, { mining: number; opt: number }> = {
-  metal:    { mining:  0, opt:  1 },
-  water:    { mining: -2, opt: -1 },
-  gas:      { mining:  2, opt:  3 },
-  crystal:  { mining: -4, opt: -3 },
-  plasma:   { mining:  4, opt:  5 },
-  silicon:  { mining: -6, opt: -5 },
-  chemical: { mining:  6, opt:  7 },
+// Per-resource row position on the legacy x/y canvas (still used for save data
+// and the optional spatial layout). Resources alternate above and below row 0.
+const PROD_ROWS: Record<ResourceKey, number> = {
+  metal:    0,
+  water:   -1,
+  gas:      1,
+  crystal: -2,
+  plasma:   2,
+  silicon: -3,
+  chemical: 3,
 };
 
 // --- Build the catalogue ---------------------------------------------------
@@ -96,14 +111,20 @@ function buildCatalogue(): UpgradeNode[] {
     flag: UnlockFlag; desc: string;
     extraPrereq?: string; requiresUnlock?: UnlockFlag;
   };
+  // Milestones grow geometrically. Pre-Phase 2 the player only has metal +
+  // water from the rocky home; Phase 2 adds crystal via moon outposts. Mid
+  // milestones stay on those three so progression never gates on a resource
+  // the player can't access. Trade Hub (the endgame) requires the full set —
+  // by then the player should have claimed multiple planet types via System
+  // Expansion + Wormhole transits.
   const expSteps: ExpStep[] = [
-    { id: 'unlock-moon',        name: 'Moon Outpost',        cost: { metal: 250, silicon: 60 },                  flag: 'moon-outpost',          desc: 'Land on a moon.',                          extraPrereq: 'drone-count-3' },
-    { id: 'unlock-elevator',    name: 'Space Elevator',      cost: { metal: 800, silicon: 200, crystal: 50 },     flag: 'space-elevator',        desc: 'Tether the moon to the planet.',           requiresUnlock: 'moon-outpost' },
-    { id: 'unlock-shipyard',    name: 'Fleet Shipyard',      cost: { metal: 2000, silicon: 600, gas: 200 },       flag: 'fleet-shipyard',        desc: 'Build interplanetary haulers.',             requiresUnlock: 'space-elevator' },
-    { id: 'unlock-system',      name: 'System Expansion',    cost: { metal: 1500, silicon: 400, gas: 200 },       flag: 'system-expansion',      desc: 'Open another planet in your system.',       requiresUnlock: 'fleet-shipyard' },
-    { id: 'unlock-observatory', name: 'Wormhole Observatory',cost: { crystal: 600, gas: 600, plasma: 600 },       flag: 'wormhole-observatory',  desc: 'Map seams in hyperspace.' },
-    { id: 'unlock-transit',     name: 'Wormhole Transit',    cost: { crystal: 2000, plasma: 1500, chemical: 800 },flag: 'wormhole-transit',      desc: 'Travel to a neighbour system.',             requiresUnlock: 'wormhole-observatory' },
-    { id: 'unlock-trade',       name: 'Trade Hub',           cost: { metal: 5000, silicon: 1500, water: 800 },    flag: 'trade-hub',             desc: 'Open the galactic exchange.',               requiresUnlock: 'wormhole-transit' },
+    { id: 'unlock-moon',        name: 'Moon Outpost',        cost: { metal: 200,        water: 100 },                                                                                                  flag: 'moon-outpost',          desc: 'Land on a moon (+5/s crystal per moon).',   extraPrereq: 'drone-count-3' },
+    { id: 'unlock-elevator',    name: 'Space Elevator',      cost: { metal: 1500,       water: 800,        crystal: 400 },                                                                             flag: 'space-elevator',        desc: 'Tether the moon to the planet.',            requiresUnlock: 'moon-outpost' },
+    { id: 'unlock-shipyard',    name: 'Fleet Shipyard',      cost: { metal: 8000,       water: 5000,       crystal: 3000 },                                                                            flag: 'fleet-shipyard',        desc: 'Build interplanetary haulers.',             requiresUnlock: 'space-elevator' },
+    { id: 'unlock-system',      name: 'System Expansion',    cost: { metal: 40000,      water: 25000,      crystal: 15000 },                                                                           flag: 'system-expansion',      desc: 'Claim other planets in your system.',       requiresUnlock: 'fleet-shipyard' },
+    { id: 'unlock-observatory', name: 'Wormhole Observatory',cost: { metal: 250000,     water: 150000,     crystal: 100000 },                                                                          flag: 'wormhole-observatory',  desc: 'Map seams in hyperspace.',                  requiresUnlock: 'system-expansion' },
+    { id: 'unlock-transit',     name: 'Wormhole Transit',    cost: { metal: 2000000,    water: 1500000,    crystal: 1000000 },                                                                         flag: 'wormhole-transit',      desc: 'Travel to a neighbour system.',             requiresUnlock: 'wormhole-observatory' },
+    { id: 'unlock-trade',       name: 'Trade Hub',           cost: { metal: 50000000,   water: 30000000,   crystal: 20000000, silicon: 10000000, gas: 10000000, plasma: 10000000, chemical: 10000000 },flag: 'trade-hub',             desc: 'Open the galactic exchange.',               requiresUnlock: 'wormhole-transit' },
   ];
   let prev: string = 'core';
   for (let i = 0; i < expSteps.length; i++) {
@@ -124,46 +145,26 @@ function buildCatalogue(): UpgradeNode[] {
   }
 
   // ---------- PRODUCTION (EAST) --------------------------------------------
-  // Mining chain: tier 1 hangs off Core, tiers 2-6 march east along the lane.
-  // Optimisation chain: branches off Mining-3 onto the row directly below,
-  // continuing east further than the mining chain reaches.
+  // One chain per resource — pure multiplier (rate-mul). Planets supply flat
+  // income; this chain just amplifies it. Tier 1 hangs off Core; subsequent
+  // tiers march east along the resource's lane.
   for (const r of PRODUCTION_RECIPES) {
-    const rows = PROD_ROWS[r.resource]!;
-
+    const row = PROD_ROWS[r.resource]!;
     let chainPrev: string = 'core';
-    for (let t = 0; t < TIERS; t++) {
-      const id = `prod-${r.resource}-rate-${t + 1}`;
-      const e: UpgradeEffect = { kind: 'rate-add', resource: r.resource, value: PROD_RATE_PER_TIER[t]! };
-      out.push({
-        id,
-        name: r.miningName,
-        tierLabel: TIER_LABEL[t]!,
-        category: 'production',
-        description: `+${PROD_RATE_PER_TIER[t]!.toFixed(1)} ${r.resource}/s`,
-        cost: escalatedCost(r.resource, 8, 1.55, t),
-        effect: e,
-        prereq: chainPrev,
-        requiresResource: r.resource,
-        ...grid(t + 1, rows.mining),
-      });
-      chainPrev = id;
-    }
-
-    chainPrev = `prod-${r.resource}-rate-3`;
     for (let t = 0; t < TIERS; t++) {
       const id = `prod-${r.resource}-mul-${t + 1}`;
       const e: UpgradeEffect = { kind: 'rate-mul', resource: r.resource, value: PROD_MUL_PER_TIER[t]! };
       out.push({
         id,
-        name: r.optName,
+        name: r.name,
         tierLabel: TIER_LABEL[t]!,
         category: 'production',
-        description: `+${Math.round(PROD_MUL_PER_TIER[t]! * 100)}% ${r.flavour}`,
-        cost: blendedCost(r.resource, 32, r.resource === 'metal' ? r.resource : 'metal', r.resource === 'metal' ? 0 : 12, 1.65, t),
+        description: `+${Math.round(PROD_MUL_PER_TIER[t]! * 100)}% ${r.resource} output`,
+        cost: blendedCost(r.resource, 24, r.resource === 'metal' ? r.resource : 'metal', r.resource === 'metal' ? 0 : 8, 1.85, t),
         effect: e,
         prereq: chainPrev,
         requiresResource: r.resource,
-        ...grid(t + 3, rows.opt),
+        ...grid(t + 1, row),
       });
       chainPrev = id;
     }
@@ -186,77 +187,79 @@ function buildCatalogue(): UpgradeNode[] {
   }
   const westChains: WestSpec[] = [
     // Early-game cluster around row 0 — mixed: Storage (logistics), then
-    // alternating with Drones and Logistics on neighbouring rows.
+    // alternating with Drones and Logistics on neighbouring rows. All west
+    // chains share tieredCost so Tier I-III pay in metal+water (rocky-home
+    // baseline) and Tier IV-VI add crystal once moons are up.
     {
       baseId: 'storage-cap', name: 'Storage Bays', category: 'logistics', row: 0, headPrereq: 'core',
-      effects: [0.5, 0.5, 0.75, 1.0, 1.25, 1.5].map((v): UpgradeEffect => ({ kind: 'storage-mul', value: v })),
-      descs:   [0.5, 0.5, 0.75, 1.0, 1.25, 1.5].map((v) => `+${Math.round(v * 100)}% capacity`),
-      cost: (t) => escalatedCost('metal', 22, 1.55, t),
+      effects: [1, 2, 5, 12, 30, 80].map((v): UpgradeEffect => ({ kind: 'storage-mul', value: v })),
+      descs:   [1, 2, 5, 12, 30, 80].map((v) => `+${v * 100}% capacity`),
+      cost: (t) => tieredCost(30, 1.85, t),
     },
     {
       baseId: 'refinery-eff', name: 'Refinery', category: 'logistics', row: 1, headPrereq: 'core',
-      effects: [0.05, 0.06, 0.07, 0.08, 0.10, 0.12].map((v): UpgradeEffect => ({ kind: 'global-mul', value: v })),
-      descs:   [0.05, 0.06, 0.07, 0.08, 0.10, 0.12].map((v) => `+${Math.round(v * 100)}% all output`),
-      cost: (t) => blendedCost('metal', 36, 'silicon', 8, 1.65, t),
+      effects: [0.10, 0.20, 0.40, 0.80, 1.60, 3.20].map((v): UpgradeEffect => ({ kind: 'global-mul', value: v })),
+      descs:   [0.10, 0.20, 0.40, 0.80, 1.60, 3.20].map((v) => `+${Math.round(v * 100)}% all output`),
+      cost: (t) => tieredCost(50, 1.95, t),
     },
     {
       baseId: 'auto-sort', name: 'Auto-Sort', category: 'logistics', row: -1, headPrereq: 'core',
-      effects: [0.06, 0.07, 0.08, 0.10, 0.12, 0.15].map((v): UpgradeEffect => ({ kind: 'drone-cargo', value: v })),
-      descs:   [0.06, 0.07, 0.08, 0.10, 0.12, 0.15].map((v) => `+${Math.round(v * 100)}% routing`),
-      cost: (t) => blendedCost('metal', 60, 'crystal', 6, 1.7, t),
+      effects: [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v): UpgradeEffect => ({ kind: 'drone-cargo', value: v })),
+      descs:   [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v) => `+${Math.round(v * 100)}% routing`),
+      cost: (t) => tieredCost(80, 1.9, t),
     },
 
     {
       baseId: 'drone-count', name: 'Drone Fleet', category: 'drones', row: 2, headPrereq: 'core',
-      effects: [1, 1, 2, 2, 3, 4].map((v): UpgradeEffect => ({ kind: 'drone-count', value: v })),
-      descs:   [1, 1, 2, 2, 3, 4].map((v) => `+${v} drone${v === 1 ? '' : 's'}`),
-      cost: (t) => blendedCost('metal', 14, 'silicon', 4, 1.6, t),
+      effects: [2, 3, 5, 8, 12, 18].map((v): UpgradeEffect => ({ kind: 'drone-count', value: v })),
+      descs:   [2, 3, 5, 8, 12, 18].map((v) => `+${v} drones`),
+      cost: (t) => tieredCost(18, 1.85, t),
     },
     {
       baseId: 'drone-speed', name: 'Drone Engines', category: 'drones', row: -2,
       // Bridges back to the drones cluster across the centre — produces a long
       // visible cross-edge from the drone-count branch up to the engines branch.
       headPrereq: 'drone-count-1',
-      effects: [0.10, 0.12, 0.15, 0.18, 0.22, 0.28].map((v): UpgradeEffect => ({ kind: 'drone-speed', value: v })),
-      descs:   [0.10, 0.12, 0.15, 0.18, 0.22, 0.28].map((v) => `+${Math.round(v * 100)}% drone speed`),
-      cost: (t) => blendedCost('metal', 22, 'plasma', 4, 1.6, t),
+      effects: [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v): UpgradeEffect => ({ kind: 'drone-speed', value: v })),
+      descs:   [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v) => `+${Math.round(v * 100)}% drone speed`),
+      cost: (t) => tieredCost(30, 1.85, t),
     },
     {
       baseId: 'drone-cargo', name: 'Drone Cargo', category: 'drones', row: 3,
       headPrereq: 'drone-count-2',
-      effects: [0.15, 0.18, 0.22, 0.27, 0.33, 0.42].map((v): UpgradeEffect => ({ kind: 'drone-cargo', value: v })),
-      descs:   [0.15, 0.18, 0.22, 0.27, 0.33, 0.42].map((v) => `+${Math.round(v * 100)}% cargo hold`),
-      cost: (t) => blendedCost('metal', 28, 'gas', 4, 1.6, t),
+      effects: [0.30, 0.60, 1.20, 2.40, 4.80, 9.60].map((v): UpgradeEffect => ({ kind: 'drone-cargo', value: v })),
+      descs:   [0.30, 0.60, 1.20, 2.40, 4.80, 9.60].map((v) => `+${Math.round(v * 100)}% cargo hold`),
+      cost: (t) => tieredCost(40, 1.85, t),
     },
 
     // Tech tier — gated by mid-game logistics/drone milestones, not by Core.
     {
       baseId: 'tech-global', name: 'Industrial Doctrine', category: 'tech', row: -3,
       headPrereq: 'storage-cap-2',
-      effects: [0.08, 0.10, 0.12, 0.14, 0.16, 0.20].map((v): UpgradeEffect => ({ kind: 'global-mul', value: v })),
-      descs:   [0.08, 0.10, 0.12, 0.14, 0.16, 0.20].map((v) => `+${Math.round(v * 100)}% global`),
-      cost: (t) => blendedCost('metal', 70, 'silicon', 30, 1.85, t),
+      effects: [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v): UpgradeEffect => ({ kind: 'global-mul', value: v })),
+      descs:   [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v) => `+${Math.round(v * 100)}% global`),
+      cost: (t) => tieredCost(100, 2.05, t),
     },
     {
       baseId: 'tech-drones', name: 'Swarm Doctrine', category: 'tech', row: 4,
       headPrereq: 'drone-count-3',
-      effects: [1, 1, 2, 2, 3, 4].map((v): UpgradeEffect => ({ kind: 'drone-count', value: v })),
-      descs:   [1, 1, 2, 2, 3, 4].map((v) => `+${v} drone${v === 1 ? '' : 's'}`),
-      cost: (t) => blendedCost('metal', 80, 'plasma', 12, 1.85, t),
+      effects: [3, 5, 8, 12, 18, 25].map((v): UpgradeEffect => ({ kind: 'drone-count', value: v })),
+      descs:   [3, 5, 8, 12, 18, 25].map((v) => `+${v} drones`),
+      cost: (t) => tieredCost(120, 2.05, t),
     },
     {
       baseId: 'tech-storage', name: 'Storage Doctrine', category: 'tech', row: -4,
       headPrereq: 'refinery-eff-2',
-      effects: [0.20, 0.25, 0.30, 0.35, 0.40, 0.50].map((v): UpgradeEffect => ({ kind: 'storage-mul', value: v })),
-      descs:   [0.20, 0.25, 0.30, 0.35, 0.40, 0.50].map((v) => `+${Math.round(v * 100)}% storage`),
-      cost: (t) => blendedCost('metal', 100, 'gas', 20, 1.85, t),
+      effects: [50, 200, 1000, 5000, 25000, 100000].map((v): UpgradeEffect => ({ kind: 'storage-mul', value: v })),
+      descs:   [50, 200, 1000, 5000, 25000, 100000].map((v) => `×${v + 1} capacity`),
+      cost: (t) => tieredCost(150, 2.15, t),
     },
     {
       baseId: 'tech-quantum', name: 'Quantum Compute', category: 'tech', row: 5,
       headPrereq: 'drone-speed-2',
-      effects: [0.05, 0.06, 0.08, 0.10, 0.12, 0.15].map((v): UpgradeEffect => ({ kind: 'drone-speed', value: v })),
-      descs:   [0.05, 0.06, 0.08, 0.10, 0.12, 0.15].map((v) => `+${Math.round(v * 100)}% drone speed`),
-      cost: (t) => blendedCost('crystal', 40, 'silicon', 80, 1.95, t),
+      effects: [0.15, 0.30, 0.60, 1.20, 2.40, 4.80].map((v): UpgradeEffect => ({ kind: 'drone-speed', value: v })),
+      descs:   [0.15, 0.30, 0.60, 1.20, 2.40, 4.80].map((v) => `+${Math.round(v * 100)}% drone speed`),
+      cost: (t) => tieredCost(180, 2.15, t),
     },
   ];
   for (const ch of westChains) {

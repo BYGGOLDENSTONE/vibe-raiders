@@ -46,6 +46,45 @@ export const PLANET_TYPE_RESOURCE: Record<PlanetType, ResourceKey> = {
   toxic:  'chemical',
 };
 
+// ---- Income model (W4) -----------------------------------------------------
+//
+// Every owned planet contributes a primary + secondary baseline income to the
+// empire. Numbers are tuned for the incremental curve: starts at a few /s,
+// reaches thousands once a system is fully claimed, millions when wormhole-tier
+// systems come online, billions across multiple systems.
+//
+// The same income gets multiplied by:
+//   - System tier (T1 = home, ×1; T2 = wormhole-claimed, ×100; ...)
+//   - Planet-count synergy (+SYNERGY_PER_PLANET per owned planet, compound)
+//   - Per-resource and global upgrade multipliers
+//   - Drone throughput
+export interface PlanetIncome {
+  primary: { resource: ResourceKey; rate: number };
+  secondary: { resource: ResourceKey; rate: number };
+}
+
+export const PLANET_INCOME: Record<PlanetType, PlanetIncome> = {
+  rocky:  { primary: { resource: 'metal',    rate: 3 }, secondary: { resource: 'water',  rate: 1.5 } },
+  ocean:  { primary: { resource: 'water',    rate: 3 }, secondary: { resource: 'gas',    rate: 1.5 } },
+  gas:    { primary: { resource: 'gas',      rate: 3 }, secondary: { resource: 'plasma', rate: 1.5 } },
+  ice:    { primary: { resource: 'crystal',  rate: 3 }, secondary: { resource: 'water',  rate: 1.5 } },
+  lava:   { primary: { resource: 'plasma',   rate: 3 }, secondary: { resource: 'metal',  rate: 1.5 } },
+  desert: { primary: { resource: 'silicon',  rate: 3 }, secondary: { resource: 'metal',  rate: 1.5 } },
+  toxic:  { primary: { resource: 'chemical', rate: 3 }, secondary: { resource: 'gas',    rate: 1.5 } },
+};
+
+// Phase 2 (Moon Outpost) unlock — every owned planet's moons each contribute
+// this rate (scaled by system tier).
+export const MOON_OUTPOST_INCOME = { resource: 'crystal' as ResourceKey, rate: 5 };
+
+// Each owned planet adds this much to a global synergy multiplier (compound).
+// 7-planet full home system → 1 + 0.2 × 7 = 2.4× global from synergy alone.
+export const SYNERGY_PER_PLANET = 0.2;
+
+// Each new system tier multiplies that system's planets by this base.
+// Home (T1) ×1, T2 ×100, T3 ×10,000, T4 ×1,000,000.
+export const SYSTEM_TIER_BASE = 100;
+
 export type ResourceBag = Record<ResourceKey, number>;
 
 export function emptyBag(): ResourceBag {
@@ -111,7 +150,10 @@ export interface EmpireState {
   unlockedNodes: string[];
   ownedPlanets: string[];
   unlocks: UnlockFlag[];
+  // Map systemId → tier (1 = home, 2+ = wormhole-claimed). Empty in early game;
+  // home system gets implicit T1. Multipliers apply via SYSTEM_TIER_BASE.
+  claimedSystems: Record<string, number>;
   lastSavedAt: number;
 }
 
-export const STORAGE_KEY = 'vibecoder.empire.v3';
+export const STORAGE_KEY = 'vibecoder.empire.v5';

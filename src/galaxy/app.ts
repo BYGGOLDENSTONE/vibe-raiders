@@ -99,6 +99,7 @@ export class App {
 
     // UI
     this.ui = new UI(this.overlay, this.galaxy, (next) => this.navigateTo(next));
+    this.refreshHomeMarkers();
     this.ui.render(this.state);
 
     // Empire UI: upgrade modal (hidden until launched), then HUD that
@@ -110,6 +111,8 @@ export class App {
       this.upgradePanel.refresh();
       this.hud.refresh();
       this.rebuildSurfaceIfNeeded();
+      this.refreshHomeMarkers();
+      this.ui.render(this.state);
     });
     this.rebuildSurfaceIfNeeded();
 
@@ -286,6 +289,25 @@ export class App {
         return;
       }
     }
+  }
+
+  // Push current home/owned state to the label manager and breadcrumb UI so
+  // the HOME / HOME SYSTEM badges stay in sync with the empire.
+  private refreshHomeMarkers(): void {
+    const homeSystemId = this.empire.state.homeSystemId;
+    const homePlanetId = this.empire.state.homePlanetId;
+    const fullClaimed = this.empire.isHomeSystemFullyClaimed();
+    this.labels.markHome({
+      homePlanetId,
+      homeSystemId,
+      ownedPlanets: new Set(this.empire.state.ownedPlanets),
+      homeSystemFullyClaimed: fullClaimed,
+    });
+    this.ui.setHomeContext({
+      systemId: homeSystemId,
+      planetId: homePlanetId,
+      fullSystemClaimed: fullClaimed,
+    });
   }
 
   // Build / rebuild the home-planet surface visuals. Cheap-skips when the

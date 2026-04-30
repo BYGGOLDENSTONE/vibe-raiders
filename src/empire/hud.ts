@@ -91,7 +91,7 @@ export class ResourceHUD {
       const chip = this.chips.get(k)!;
       chip.amount.textContent = formatNumber(this.displayed[k]);
       const rate = this.displayedRates[k];
-      const isLocked = m.ownership[k] === 0;
+      const isLocked = !m.produces.has(k);
       if (isLocked) {
         chip.rate.textContent = '—';
         chip.rate.classList.add('locked');

@@ -44,13 +44,21 @@ const RISK_CLASS: Record<RiskLevel, string> = {
 
 export type NavigateFn = (next: LayerState) => void;
 
+interface HomeCtx {
+  systemId: string | null;
+  planetId: string | null;
+  fullSystemClaimed: boolean;
+}
+
 export class UI {
   private breadcrumb: HTMLDivElement;
   private switcher: HTMLDivElement;
+  private homeBtn: HTMLButtonElement;
   private panel: HTMLDivElement;
   private hint: HTMLDivElement;
   private galaxy: GalaxyHandle;
   private navigate: NavigateFn;
+  private home: HomeCtx = { systemId: null, planetId: null, fullSystemClaimed: false };
 
   constructor(root: HTMLDivElement, galaxy: GalaxyHandle, navigate: NavigateFn) {
     this.galaxy = galaxy;
@@ -63,6 +71,14 @@ export class UI {
     this.switcher.setAttribute('role', 'group');
     this.switcher.setAttribute('aria-label', 'View layer');
     root.appendChild(this.switcher);
+
+    this.homeBtn = document.createElement('button');
+    this.homeBtn.className = 'gx-home-btn';
+    this.homeBtn.type = 'button';
+    this.homeBtn.title = 'Jump to home planet';
+    this.homeBtn.innerHTML = '<span class="gx-home-ico">★</span><span>HOME</span>';
+    this.homeBtn.addEventListener('click', () => this.jumpHome());
+    root.appendChild(this.homeBtn);
 
     this.panel = el('div', 'gx-panel');
     root.appendChild(this.panel);
@@ -80,6 +96,33 @@ export class UI {
     this.renderBreadcrumb(layer);
     this.renderSwitcher(layer);
     this.renderPanel(layer);
+    this.renderHomeBtn(layer);
+  }
+
+  setHomeContext(home: HomeCtx): void {
+    this.home = home;
+  }
+
+  // Disable when we're already at the home-planet view; otherwise let the
+  // player one-click smooth-fly back. navigateTo handles the layer transition
+  // and CameraController interpolates camera position + target.
+  private renderHomeBtn(layer: LayerState): void {
+    const haveHome = !!this.home.planetId && !!this.home.systemId;
+    const atHome =
+      layer.kind === 'planet' &&
+      layer.systemId === this.home.systemId &&
+      layer.planetId === this.home.planetId;
+    this.homeBtn.disabled = !haveHome || atHome;
+    this.homeBtn.style.display = haveHome ? '' : 'none';
+  }
+
+  private jumpHome(): void {
+    if (!this.home.systemId || !this.home.planetId) return;
+    this.navigate({
+      kind: 'planet',
+      systemId: this.home.systemId,
+      planetId: this.home.planetId,
+    });
   }
 
   // --- Breadcrumb ---
@@ -93,8 +136,12 @@ export class UI {
     if (layer.systemId) {
       const sys = this.galaxy.systems.get(layer.systemId);
       if (sys) {
+        const isHomeSys = layer.systemId === this.home.systemId;
+        const sysPrefix = isHomeSys
+          ? (this.home.fullSystemClaimed ? '★★ ' : '★ ')
+          : '';
         parts.push({
-          label: sys.data.name,
+          label: sysPrefix + sys.data.name,
           onClick: layer.kind === 'system' ? null : () =>
             this.navigate({ kind: 'system', systemId: layer.systemId, planetId: null }),
         });
@@ -103,7 +150,10 @@ export class UI {
     if (layer.planetId && layer.systemId) {
       const sys = this.galaxy.systems.get(layer.systemId);
       const planet = sys?.planets.find((p) => p.data.id === layer.planetId);
-      if (planet) parts.push({ label: planet.data.name, onClick: null });
+      if (planet) {
+        const planetPrefix = layer.planetId === this.home.planetId ? '★ ' : '';
+        parts.push({ label: planetPrefix + planet.data.name, onClick: null });
+      }
     }
 
     this.breadcrumb.innerHTML = '';
