@@ -148,15 +148,23 @@ export class App {
       const dist = outer * 1.55 + 24;
       return { distance: dist, pitch: 0.55, minDist: 14, maxDist: dist * 4 };
     }
-    // planet
+    // planet — frame the whole planet system (rings + moon apoapsis), not just the body.
     const sys = layer.systemId ? this.galaxy.systems.get(layer.systemId) : null;
     const planet = sys?.planets.find((p) => p.data.id === layer.planetId);
     const r = planet ? planet.data.radius : 0.6;
+    let extent = r;
+    if (planet) {
+      if (planet.data.hasRings) extent = Math.max(extent, planet.data.ringOuter);
+      for (const m of planet.data.moons) {
+        extent = Math.max(extent, m.orbitRadius * (1 + m.orbitEccentricity) + m.radius);
+      }
+    }
+    const dist = Math.max(extent * 2.4 + 2, 3.5);
     return {
-      distance: Math.max(r * 4.5, 3.5),
+      distance: dist,
       pitch: 0.32,
       minDist: r * 1.6,
-      maxDist: r * 60,
+      maxDist: Math.max(extent * 12, r * 60),
     };
   }
 
@@ -262,16 +270,23 @@ export class App {
   private loop = (): void => {
     const dt = Math.min(this.clock.getDelta(), 0.05);
 
+    // 1. Advance the world first. Slow galactic rotation around the central
+    //    black hole (~10 min/revolution), then planet/moon orbits.
+    this.galaxy.root.rotation.y += dt * 0.010;
+    // Billboards (star glow, black hole halo) face the camera position from
+    // the previous frame — invisible drift since the camera moves smoothly.
+    const prevCamPos = this.camera.position;
+    updateGalaxy(this.galaxy, dt, prevCamPos, this.state.systemId);
+
+    // 2. Now place the camera based on the *current* frame's world positions.
+    //    This was the source of the click-to-track shimmer: when the camera
+    //    read the tracked node before world advance, render saw the planet
+    //    one dt ahead of the camera target.
     this.controller.update(dt);
 
-    // Slow galactic rotation around the central black hole — perceptible
-    // (~10 min/revolution) without being distracting at the system scale.
-    this.galaxy.root.rotation.y += dt * 0.010;
-
+    // 3. Background follows the new camera position so layers always envelop
+    //    the view at any zoom.
     const camPos = this.camera.position;
-    updateGalaxy(this.galaxy, dt, camPos, this.state.systemId);
-
-    // Background follow camera so layers always envelop the view at any zoom.
     this.galaxy.background.skydome.position.copy(camPos);
     const layers = this.galaxy.background.starLayers;
     if (layers[0]) layers[0].position.copy(camPos);
