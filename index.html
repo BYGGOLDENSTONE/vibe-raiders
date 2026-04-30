@@ -3,82 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Game Jam</title>
-    <meta name="theme-color" content="#0a0c14" />
-
-    <style>
-      :root {
-        color-scheme: dark;
-        --bg: #0a0c14;
-        --fg: #d8dde4;
-      }
-      * { box-sizing: border-box; }
-      html, body {
-        margin: 0; padding: 0; height: 100%; overflow: hidden;
-      }
-      body {
-        background: var(--bg);
-        color: var(--fg);
-        font-family: 'Inter', system-ui, sans-serif;
-        font-size: 14px;
-        user-select: none;
-        -webkit-user-select: none;
-      }
-
-      #app, #game-canvas {
-        position: fixed;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-      }
-      #game-canvas { display: block; }
-
-      #ui-root {
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        z-index: 10;
-      }
-      #ui-root > * { pointer-events: auto; }
-
-      #mobile-warn {
-        display: none;
-        position: fixed;
-        inset: 0;
-        background: var(--bg);
-        z-index: 1000;
-        padding: 32px;
-        text-align: center;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 16px;
-      }
-      #mobile-warn h2 {
-        margin: 0;
-        letter-spacing: 0.32em;
-      }
-      #mobile-warn p {
-        max-width: 320px;
-        line-height: 1.6;
-      }
-
-      @media (hover: none) and (pointer: coarse), (max-width: 768px) {
-        #mobile-warn { display: flex; }
-        #app { display: none; }
-      }
-    </style>
+    <title>Galaksi · Vibe Jam 2026</title>
+    <meta name="theme-color" content="#06070d" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
   <body>
-    <div id="app">
-      <canvas id="game-canvas"></canvas>
-      <div id="ui-root"></div>
-    </div>
-
-    <div id="mobile-warn">
-      <h2>DESKTOP REQUIRED</h2>
-      <p>This game needs a keyboard and mouse. Open on desktop to play.</p>
-    </div>
+    <div id="app"></div>
 
     <!-- Vibe Jam 2026 mandatory widget -->
     <script async src="https://vibej.am/2026/widget.js"></script>
