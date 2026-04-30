@@ -22,6 +22,13 @@ export interface HomeMarkerOpts {
   homeSystemId: string;
   ownedPlanets: Set<string>;
   homeSystemFullyClaimed: boolean;
+  // W4-D: when the player hasn't picked a homeworld yet, eligible candidates
+  // get a "claim ✦" prefix so they stand out across galaxy/system views.
+  eligibleHomeworlds: Set<string>;
+  // W4-E: planetId whose moons are awaiting outpost selection (single planet
+  // — the player's home — for now). Empty string disables the marker.
+  awaitingMoonChoiceForPlanet: string;
+  outpostMoonId: string | null;
 }
 
 function tempVec(): THREE.Vector3 { return new THREE.Vector3(); }
@@ -131,13 +138,33 @@ export class LabelManager {
   // Call this after build() and whenever the empire's owned-planets set changes.
   markHome(opts: HomeMarkerOpts): void {
     for (const l of this.labels) {
-      let kind: 'home-planet' | 'home-system-full' | 'home-system-partial' | 'owned-planet' | null = null;
-      if (l.kind === 'planet' && l.planetId === opts.homePlanetId) {
+      type Kind =
+        | 'home-planet'
+        | 'home-system-full'
+        | 'home-system-partial'
+        | 'owned-planet'
+        | 'eligible-homeworld'
+        | 'outpost-moon-active'
+        | 'outpost-moon-pending'
+        | null;
+      let kind: Kind = null;
+
+      if (l.kind === 'planet' && l.planetId === opts.homePlanetId && opts.homePlanetId) {
         kind = 'home-planet';
       } else if (l.kind === 'planet' && l.planetId && opts.ownedPlanets.has(l.planetId)) {
         kind = 'owned-planet';
-      } else if (l.kind === 'system' && l.systemId === opts.homeSystemId) {
+      } else if (l.kind === 'planet' && l.planetId && opts.eligibleHomeworlds.has(l.planetId)) {
+        kind = 'eligible-homeworld';
+      } else if (l.kind === 'system' && l.systemId === opts.homeSystemId && opts.homeSystemId) {
         kind = opts.homeSystemFullyClaimed ? 'home-system-full' : 'home-system-partial';
+      } else if (
+        l.kind === 'moon' &&
+        l.planetId === opts.awaitingMoonChoiceForPlanet &&
+        opts.awaitingMoonChoiceForPlanet
+      ) {
+        kind = l.moonId === opts.outpostMoonId ? 'outpost-moon-active' : 'outpost-moon-pending';
+      } else if (l.kind === 'moon' && l.moonId && l.moonId === opts.outpostMoonId) {
+        kind = 'outpost-moon-active';
       }
 
       let prefix = '';
@@ -146,6 +173,9 @@ export class LabelManager {
         case 'home-system-full':    prefix = '★★ HOME SYSTEM · '; break;
         case 'home-system-partial': prefix = '★ HOME · '; break;
         case 'owned-planet':        prefix = '✓ '; break;
+        case 'eligible-homeworld':  prefix = '✦ CLAIM · '; break;
+        case 'outpost-moon-pending':prefix = '◌ pick · '; break;
+        case 'outpost-moon-active': prefix = '◐ outpost · '; break;
       }
       l.textEl.textContent = prefix + l.baseText;
       l.el.dataset.home = kind ?? '';

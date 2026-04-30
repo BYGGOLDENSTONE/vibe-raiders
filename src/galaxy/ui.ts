@@ -50,15 +50,32 @@ interface HomeCtx {
   fullSystemClaimed: boolean;
 }
 
+// Slim hook surface UI uses to render the W4-D/E claim flows without taking
+// a hard dependency on Empire (keeps galaxy/* free of empire types).
+export interface EmpireCtx {
+  homeClaimed: boolean;
+  needsMoonChoice: boolean;
+  isHomeworldEligible: (planetId: string) => boolean;
+  claimHomeworld: (planetId: string) => void;
+}
+
 export class UI {
   private breadcrumb: HTMLDivElement;
   private switcher: HTMLDivElement;
   private homeBtn: HTMLButtonElement;
   private panel: HTMLDivElement;
   private hint: HTMLDivElement;
+  private banner: HTMLDivElement;
   private galaxy: GalaxyHandle;
   private navigate: NavigateFn;
   private home: HomeCtx = { systemId: null, planetId: null, fullSystemClaimed: false };
+  private empireCtx: EmpireCtx = {
+    homeClaimed: true,
+    needsMoonChoice: false,
+    isHomeworldEligible: () => false,
+    claimHomeworld: () => {},
+  };
+  private layer: LayerState = { kind: 'galaxy', systemId: null, planetId: null };
 
   constructor(root: HTMLDivElement, galaxy: GalaxyHandle, navigate: NavigateFn) {
     this.galaxy = galaxy;
@@ -83,6 +100,22 @@ export class UI {
     this.panel = el('div', 'gx-panel');
     root.appendChild(this.panel);
 
+    // W4-D/E sticky banner: announces what the player needs to do to advance
+    // ("Choose a homeworld" before claim, "Click a moon" after Moon Outpost).
+    this.banner = el('div', 'gx-banner');
+    this.banner.style.display = 'none';
+    root.appendChild(this.banner);
+
+    // Delegated click for the claim-homeworld button rendered inside the
+    // planet panel — kept in one place so the renderer can churn the panel
+    // freely without leaking handlers.
+    this.panel.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('[data-claim-planet]') as HTMLElement | null;
+      if (!btn) return;
+      const planetId = btn.dataset.claimPlanet ?? '';
+      if (planetId) this.empireCtx.claimHomeworld(planetId);
+    });
+
     this.hint = el('div', 'gx-hint');
     this.hint.innerHTML = `
       <span><strong>Left click</strong> select</span>
@@ -93,14 +126,42 @@ export class UI {
   }
 
   render(layer: LayerState): void {
+    this.layer = layer;
     this.renderBreadcrumb(layer);
     this.renderSwitcher(layer);
     this.renderPanel(layer);
     this.renderHomeBtn(layer);
+    this.renderBanner();
   }
 
   setHomeContext(home: HomeCtx): void {
     this.home = home;
+  }
+  setEmpireContext(ctx: EmpireCtx): void {
+    this.empireCtx = ctx;
+    this.renderBanner();
+    this.renderPanel(this.layer);
+  }
+
+  private renderBanner(): void {
+    let html = '';
+    if (!this.empireCtx.homeClaimed) {
+      html = `
+        <span class="gx-banner-ico">★</span>
+        <span><strong>Choose your homeworld</strong> — open a system and click a rocky planet (with moons) to claim it.</span>
+      `;
+    } else if (this.empireCtx.needsMoonChoice) {
+      html = `
+        <span class="gx-banner-ico">◐</span>
+        <span><strong>Pick an outpost moon</strong> — open your home planet view and click one of its moons.</span>
+      `;
+    }
+    if (html) {
+      this.banner.innerHTML = html;
+      this.banner.style.display = '';
+    } else {
+      this.banner.style.display = 'none';
+    }
   }
 
   // Disable when we're already at the home-planet view; otherwise let the
@@ -270,6 +331,15 @@ export class UI {
       ? 'None'
       : `${p.moons.length} (${p.moons.map((m) => escapeHtml(m.name.split(' ').pop() ?? '')).join(', ')})`;
     const riskCls = RISK_CLASS[p.risk];
+
+    let claimRow = '';
+    if (!this.empireCtx.homeClaimed) {
+      const eligible = this.empireCtx.isHomeworldEligible(p.id);
+      claimRow = eligible
+        ? `<button class="gx-claim-btn" data-claim-planet="${escapeHtml(p.id)}">★ Claim as Homeworld</button>`
+        : `<div class="gx-claim-hint">Homeworld must be a <strong>rocky</strong> planet with at least one moon.</div>`;
+    }
+
     return `
       <div class="gx-panel-eyebrow">Planet focus</div>
       <div class="gx-panel-title"><span class="gx-row-dot" style="background:${dot}"></span>${escapeHtml(p.name)}</div>
@@ -285,6 +355,7 @@ export class UI {
         <div class="gx-panel-row"><span class="gx-k">Rings</span><span class="gx-v">${p.hasRings ? 'Yes' : 'No'}</span></div>
         <div class="gx-panel-row"><span class="gx-k">Moons</span><span class="gx-v">${moonsLine}</span></div>
       </div>
+      ${claimRow}
     `;
   }
 

@@ -72,9 +72,11 @@ const PRODUCTION_RECIPES: ProdRecipe[] = [
   { resource: 'chemical', name: 'Chemical Plant'   },
 ];
 
-// Big multipliers — the new economy has planet income as the flat baseline,
-// so production upgrades are pure boost. Sum of tiers ≈ ×16.5 per resource.
-const PROD_MUL_PER_TIER  = [0.25, 0.50, 1.00, 2.00, 4.00, 8.00];
+// W4-C balance pass — values reduced ~4× across the board. Old curve hit
+// ×16.75 sum which combined with global-mul + drone throughput compounded to
+// millions/s on a single planet. New sum ×3.8 keeps single-planet economy
+// honest; multi-planet + system-tier multipliers do the heavy lifting.
+const PROD_MUL_PER_TIER  = [0.10, 0.20, 0.30, 0.50, 0.70, 1.00];
 
 // Per-resource row position on the legacy x/y canvas (still used for save data
 // and the optional spatial layout). Resources alternate above and below row 0.
@@ -192,43 +194,41 @@ function buildCatalogue(): UpgradeNode[] {
     // baseline) and Tier IV-VI add crystal once moons are up.
     {
       baseId: 'storage-cap', name: 'Storage Bays', category: 'logistics', row: 0, headPrereq: 'core',
-      effects: [1, 2, 5, 12, 30, 80].map((v): UpgradeEffect => ({ kind: 'storage-mul', value: v })),
-      descs:   [1, 2, 5, 12, 30, 80].map((v) => `+${v * 100}% capacity`),
+      effects: [0.5, 1, 2, 4, 8, 16].map((v): UpgradeEffect => ({ kind: 'storage-mul', value: v })),
+      descs:   [0.5, 1, 2, 4, 8, 16].map((v) => `+${Math.round(v * 100)}% capacity`),
       cost: (t) => tieredCost(30, 1.85, t),
     },
     {
       baseId: 'refinery-eff', name: 'Refinery', category: 'logistics', row: 1, headPrereq: 'core',
-      effects: [0.10, 0.20, 0.40, 0.80, 1.60, 3.20].map((v): UpgradeEffect => ({ kind: 'global-mul', value: v })),
-      descs:   [0.10, 0.20, 0.40, 0.80, 1.60, 3.20].map((v) => `+${Math.round(v * 100)}% all output`),
+      effects: [0.10, 0.15, 0.20, 0.25, 0.30, 0.40].map((v): UpgradeEffect => ({ kind: 'global-mul', value: v })),
+      descs:   [0.10, 0.15, 0.20, 0.25, 0.30, 0.40].map((v) => `+${Math.round(v * 100)}% all output`),
       cost: (t) => tieredCost(50, 1.95, t),
     },
     {
       baseId: 'auto-sort', name: 'Auto-Sort', category: 'logistics', row: -1, headPrereq: 'core',
-      effects: [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v): UpgradeEffect => ({ kind: 'drone-cargo', value: v })),
-      descs:   [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v) => `+${Math.round(v * 100)}% routing`),
+      effects: [0.05, 0.05, 0.10, 0.15, 0.20, 0.25].map((v): UpgradeEffect => ({ kind: 'drone-cargo', value: v })),
+      descs:   [0.05, 0.05, 0.10, 0.15, 0.20, 0.25].map((v) => `+${Math.round(v * 100)}% routing`),
       cost: (t) => tieredCost(80, 1.9, t),
     },
 
     {
       baseId: 'drone-count', name: 'Drone Fleet', category: 'drones', row: 2, headPrereq: 'core',
-      effects: [2, 3, 5, 8, 12, 18].map((v): UpgradeEffect => ({ kind: 'drone-count', value: v })),
-      descs:   [2, 3, 5, 8, 12, 18].map((v) => `+${v} drones`),
+      effects: [1, 1, 2, 2, 3, 3].map((v): UpgradeEffect => ({ kind: 'drone-count', value: v })),
+      descs:   [1, 1, 2, 2, 3, 3].map((v) => `+${v} drones`),
       cost: (t) => tieredCost(18, 1.85, t),
     },
     {
       baseId: 'drone-speed', name: 'Drone Engines', category: 'drones', row: -2,
-      // Bridges back to the drones cluster across the centre — produces a long
-      // visible cross-edge from the drone-count branch up to the engines branch.
       headPrereq: 'drone-count-1',
-      effects: [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v): UpgradeEffect => ({ kind: 'drone-speed', value: v })),
-      descs:   [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v) => `+${Math.round(v * 100)}% drone speed`),
+      effects: [0.05, 0.05, 0.10, 0.15, 0.20, 0.25].map((v): UpgradeEffect => ({ kind: 'drone-speed', value: v })),
+      descs:   [0.05, 0.05, 0.10, 0.15, 0.20, 0.25].map((v) => `+${Math.round(v * 100)}% drone speed`),
       cost: (t) => tieredCost(30, 1.85, t),
     },
     {
       baseId: 'drone-cargo', name: 'Drone Cargo', category: 'drones', row: 3,
       headPrereq: 'drone-count-2',
-      effects: [0.30, 0.60, 1.20, 2.40, 4.80, 9.60].map((v): UpgradeEffect => ({ kind: 'drone-cargo', value: v })),
-      descs:   [0.30, 0.60, 1.20, 2.40, 4.80, 9.60].map((v) => `+${Math.round(v * 100)}% cargo hold`),
+      effects: [0.05, 0.10, 0.15, 0.20, 0.30, 0.40].map((v): UpgradeEffect => ({ kind: 'drone-cargo', value: v })),
+      descs:   [0.05, 0.10, 0.15, 0.20, 0.30, 0.40].map((v) => `+${Math.round(v * 100)}% cargo hold`),
       cost: (t) => tieredCost(40, 1.85, t),
     },
 
@@ -236,18 +236,21 @@ function buildCatalogue(): UpgradeNode[] {
     {
       baseId: 'tech-global', name: 'Industrial Doctrine', category: 'tech', row: -3,
       headPrereq: 'storage-cap-2',
-      effects: [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v): UpgradeEffect => ({ kind: 'global-mul', value: v })),
-      descs:   [0.20, 0.40, 0.80, 1.50, 3.00, 6.00].map((v) => `+${Math.round(v * 100)}% global`),
+      effects: [0.10, 0.15, 0.20, 0.30, 0.40, 0.55].map((v): UpgradeEffect => ({ kind: 'global-mul', value: v })),
+      descs:   [0.10, 0.15, 0.20, 0.30, 0.40, 0.55].map((v) => `+${Math.round(v * 100)}% global`),
       cost: (t) => tieredCost(100, 2.05, t),
     },
     {
       baseId: 'tech-drones', name: 'Swarm Doctrine', category: 'tech', row: 4,
       headPrereq: 'drone-count-3',
-      effects: [3, 5, 8, 12, 18, 25].map((v): UpgradeEffect => ({ kind: 'drone-count', value: v })),
-      descs:   [3, 5, 8, 12, 18, 25].map((v) => `+${v} drones`),
+      effects: [1, 2, 3, 4, 5, 7].map((v): UpgradeEffect => ({ kind: 'drone-count', value: v })),
+      descs:   [1, 2, 3, 4, 5, 7].map((v) => `+${v} drones`),
       cost: (t) => tieredCost(120, 2.05, t),
     },
     {
+      // Storage Doctrine values kept at their old very-large numbers because
+      // storage is a ceiling, not a rate multiplier — it can't compound the
+      // economy. The endgame Trade Hub @ 50M each needs a cap this big to fit.
       baseId: 'tech-storage', name: 'Storage Doctrine', category: 'tech', row: -4,
       headPrereq: 'refinery-eff-2',
       effects: [50, 200, 1000, 5000, 25000, 100000].map((v): UpgradeEffect => ({ kind: 'storage-mul', value: v })),
@@ -257,8 +260,8 @@ function buildCatalogue(): UpgradeNode[] {
     {
       baseId: 'tech-quantum', name: 'Quantum Compute', category: 'tech', row: 5,
       headPrereq: 'drone-speed-2',
-      effects: [0.15, 0.30, 0.60, 1.20, 2.40, 4.80].map((v): UpgradeEffect => ({ kind: 'drone-speed', value: v })),
-      descs:   [0.15, 0.30, 0.60, 1.20, 2.40, 4.80].map((v) => `+${Math.round(v * 100)}% drone speed`),
+      effects: [0.05, 0.05, 0.10, 0.15, 0.20, 0.25].map((v): UpgradeEffect => ({ kind: 'drone-speed', value: v })),
+      descs:   [0.05, 0.05, 0.10, 0.15, 0.20, 0.25].map((v) => `+${Math.round(v * 100)}% drone speed`),
       cost: (t) => tieredCost(180, 2.15, t),
     },
   ];

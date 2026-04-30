@@ -23,6 +23,9 @@ export class ResourceHUD {
   private chips: Map<ResourceKey, ChipDom> = new Map();
   private button: HTMLButtonElement;
   private buttonCount: HTMLSpanElement;
+  private droneChip: HTMLDivElement;
+  private droneCountEl: HTMLSpanElement;
+  private droneMulEl: HTMLSpanElement;
   private displayed: ResourceBag;
   private displayedRates: ResourceBag;
 
@@ -41,6 +44,24 @@ export class ResourceHUD {
     for (const k of RESOURCE_KEYS) {
       this.chips.set(k, this.buildChip(k));
     }
+
+    // Drone summary chip — surfaces what those upgrades actually do at a
+    // glance: count and the resulting throughput multiplier (1 + 0.05*N +
+    // cargoAdd + speedAdd). Sits to the right of the resources, before the
+    // upgrades launcher, with its own visual style so it doesn't get mistaken
+    // for an 8th resource.
+    this.droneChip = document.createElement('div');
+    this.droneChip.className = 'em-chip em-chip-drones';
+    this.droneChip.title = 'Drone count × throughput multiplier (boosts every resource you produce)';
+    this.droneChip.innerHTML = `
+      <span class="em-chip-dot"></span>
+      <span class="em-chip-name">Drones</span>
+      <span class="em-chip-amount" data-drone-count>0</span>
+      <span class="em-chip-rate" data-drone-mul>×1.0</span>
+    `;
+    this.root.appendChild(this.droneChip);
+    this.droneCountEl = this.droneChip.querySelector('[data-drone-count]') as HTMLSpanElement;
+    this.droneMulEl = this.droneChip.querySelector('[data-drone-mul]') as HTMLSpanElement;
 
     // Vertical divider then the upgrades launcher.
     const divider = document.createElement('div');
@@ -102,6 +123,15 @@ export class ResourceHUD {
       chip.root.classList.toggle('em-chip-locked', isLocked);
     }
 
+    // Drone summary — recompute throughput so the player can read the impact
+    // of drone purchases without diving into the upgrade panel.
+    const throughput = 1
+      + 0.05 * m.droneCount
+      + Math.max(0, m.droneCargo - 1)
+      + Math.max(0, m.droneSpeed - 1);
+    this.droneCountEl.textContent = String(m.droneCount);
+    this.droneMulEl.textContent = `×${throughput.toFixed(2)}`;
+
     // Button counter: owned / total — and pulse when something is buyable.
     const ready = this.panel.readyCount();
     const owned = this.panel.ownedCount();
@@ -109,6 +139,10 @@ export class ResourceHUD {
     this.buttonCount.textContent = `${owned}/${total}`;
     this.button.classList.toggle('em-hud-btn-ready', ready > 0);
     this.button.dataset.ready = String(ready);
+
+    // Hide the whole HUD until the player has claimed a homeworld — there is
+    // no income or upgrade access in that initial state.
+    this.root.style.display = this.empire.state.homeClaimed ? '' : 'none';
   }
 
   refresh(): void {

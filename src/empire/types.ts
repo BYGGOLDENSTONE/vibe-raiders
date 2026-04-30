@@ -73,8 +73,9 @@ export const PLANET_INCOME: Record<PlanetType, PlanetIncome> = {
   toxic:  { primary: { resource: 'chemical', rate: 3 }, secondary: { resource: 'gas',    rate: 1.5 } },
 };
 
-// Phase 2 (Moon Outpost) unlock — every owned planet's moons each contribute
-// this rate (scaled by system tier).
+// Phase 2 (Moon Outpost) unlock — only the player-chosen outpost moon
+// contributes this rate (scaled by its system tier). Pre-W4-C this was a
+// per-moon-of-every-owned-planet flat add, which compounded badly.
 export const MOON_OUTPOST_INCOME = { resource: 'crystal' as ResourceKey, rate: 5 };
 
 // Each owned planet adds this much to a global synergy multiplier (compound).
@@ -84,6 +85,10 @@ export const SYNERGY_PER_PLANET = 0.2;
 // Each new system tier multiplies that system's planets by this base.
 // Home (T1) ×1, T2 ×100, T3 ×10,000, T4 ×1,000,000.
 export const SYSTEM_TIER_BASE = 100;
+
+// W4-C balance: bumped 1000 → 1500 so Phase 3 (Space Elevator @ 1500 metal)
+// fits in a fresh save's storage cap without first buying Storage Bays I.
+export const BASE_STORAGE_CAP = 1500;
 
 export type ResourceBag = Record<ResourceKey, number>;
 
@@ -142,18 +147,23 @@ export interface UpgradeNode {
 
 export interface EmpireState {
   seed: number;
+  // homeClaimed === false on a brand-new save: the player hasn't picked their
+  // homeworld yet, so the empire layer is dormant (no income, no upgrades, no
+  // markers). homeSystemId/homePlanetId are empty strings in that case.
+  homeClaimed: boolean;
   homeSystemId: string;
   homePlanetId: string;
   resources: ResourceBag;
-  // Set of node ids the player has purchased. Order doesn't matter; using
-  // an array because Set doesn't JSON-serialise without help.
   unlockedNodes: string[];
   ownedPlanets: string[];
   unlocks: UnlockFlag[];
-  // Map systemId → tier (1 = home, 2+ = wormhole-claimed). Empty in early game;
-  // home system gets implicit T1. Multipliers apply via SYSTEM_TIER_BASE.
   claimedSystems: Record<string, number>;
+  // Set after the player buys `moon-outpost` AND clicks a moon to host it.
+  // Only this moon contributes MOON_OUTPOST_INCOME and renders the dome/tether.
+  outpostMoonId: string | null;
   lastSavedAt: number;
 }
 
-export const STORAGE_KEY = 'vibecoder.empire.v5';
+// W4-C bumped from v5 — homeClaimed flow + outpostMoonId state + rebalance.
+// Old saves auto-discard so every player picks up the new economy + claim flow.
+export const STORAGE_KEY = 'vibecoder.empire.v6';

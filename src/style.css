@@ -217,6 +217,103 @@ html, body {
   opacity: 0.55;
 }
 
+/* ---------- W4-D/E claim banner ---------- */
+.gx-banner {
+  position: absolute;
+  top: 78px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 18px;
+  background: rgba(20, 28, 44, 0.85);
+  border: 1px solid rgba(255, 212, 122, 0.55);
+  border-radius: 999px;
+  color: #ffe9b2;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  z-index: 6;
+  max-width: calc(100% - 80px);
+  pointer-events: auto;
+}
+.gx-banner strong { color: #fff; }
+.gx-banner-ico {
+  font-size: 16px;
+  line-height: 1;
+  color: #ffd47a;
+  text-shadow: 0 0 12px rgba(255, 212, 122, 0.6);
+}
+
+.gx-claim-btn {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+  padding: 11px 14px;
+  background: linear-gradient(180deg, rgba(255, 212, 122, 0.22), rgba(255, 212, 122, 0.08));
+  border: 1px solid rgba(255, 212, 122, 0.55);
+  border-radius: 8px;
+  color: #ffe9b2;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: background 140ms, border-color 140ms, transform 100ms;
+}
+.gx-claim-btn:hover {
+  background: linear-gradient(180deg, rgba(255, 212, 122, 0.32), rgba(255, 212, 122, 0.14));
+  border-color: rgba(255, 212, 122, 0.85);
+  color: #fff;
+}
+.gx-claim-btn:active { transform: translateY(1px); }
+.gx-claim-hint {
+  margin-top: 12px;
+  padding: 10px 12px;
+  font-size: 11.5px;
+  color: var(--gx-fg-dim);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(160, 190, 230, 0.18);
+  border-radius: 6px;
+}
+.gx-claim-hint strong { color: var(--gx-fg); }
+
+/* Eligible-homeworld marker — pulse so the player notices it */
+.gx-label[data-home="eligible-homeworld"] {
+  border-color: rgba(255, 212, 122, 0.65);
+  background: rgba(40, 30, 12, 0.6);
+  color: #ffe9b2;
+  animation: gx-claim-pulse 1.6s ease-in-out infinite;
+}
+.gx-label[data-home="outpost-moon-pending"] {
+  border-color: rgba(155, 232, 255, 0.7);
+  background: rgba(15, 30, 40, 0.7);
+  color: #d3f4ff;
+  animation: gx-claim-pulse 1.6s ease-in-out infinite;
+}
+.gx-label[data-home="outpost-moon-active"] {
+  border-color: rgba(155, 232, 255, 0.7);
+  background: rgba(15, 30, 40, 0.7);
+  color: #d3f4ff;
+}
+@keyframes gx-claim-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 212, 122, 0.0); }
+  50%      { box-shadow: 0 0 0 6px rgba(255, 212, 122, 0.18); }
+}
+
+/* ---------- Drone HUD chip (W4-C) ---------- */
+.em-chip-drones {
+  --c: #b8c8e0;
+  margin-left: 6px;
+}
+.em-chip-drones .em-chip-amount { color: #d8e0ec; }
+.em-chip-drones .em-chip-rate {
+  color: #b0bcd0;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Detail panel (right, below HUD bar) ---------- */
 .gx-panel {
   position: absolute;

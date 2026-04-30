@@ -11,6 +11,15 @@ import { ResourceHUD } from '../empire/hud';
 import { UpgradePanel } from '../empire/panel';
 import { DebugPanel } from '../empire/debug';
 import { makeSurface, updateSurface, disposeSurface, surfaceConfig, type SurfaceHandle } from '../empire/surface';
+import {
+  makeMoonOutpost,
+  updateMoonOutpost,
+  disposeMoonOutpost,
+  setMoonOutpostVisible,
+  moonOutpostConfig,
+  findOutpostMoon,
+  type MoonOutpostHandle,
+} from '../empire/moon-outpost';
 
 const GALAXY_SEED = 20260430;
 
@@ -37,6 +46,10 @@ export class App {
   private surfaceFactoryCount = -1;
   private surfaceDroneCount = -1;
   private surfacePlanetId: string | null = null;
+  private moonOutpost: MoonOutpostHandle | null = null;
+  private moonOutpostHasElevator = false;
+  private moonOutpostPlanetId: string | null = null;
+  private moonOutpostMoonId: string | null = null;
   private state: LayerState = { kind: 'galaxy', systemId: null, planetId: null };
   private clock = new THREE.Clock();
   private canvas: HTMLCanvasElement;
@@ -99,6 +112,26 @@ export class App {
 
     // UI
     this.ui = new UI(this.overlay, this.galaxy, (next) => this.navigateTo(next));
+    this.ui.setEmpireContext({
+      homeClaimed: this.empire.state.homeClaimed,
+      needsMoonChoice: this.empire.needsOutpostMoonChoice(),
+      isHomeworldEligible: (planetId: string) => {
+        for (const s of this.galaxy.data.systems) {
+          for (const p of s.planets) {
+            if (p.id === planetId) return this.empire.isHomeworldEligible(p);
+          }
+        }
+        return false;
+      },
+      claimHomeworld: (planetId: string) => {
+        if (this.empire.claimHomeworld(planetId)) {
+          // Smooth-fly to the freshly claimed homeworld so the player sees
+          // their pick come alive (factories drop, surface populates).
+          const sysId = this.empire.state.homeSystemId;
+          this.navigateTo({ kind: 'planet', systemId: sysId, planetId });
+        }
+      },
+    });
     this.refreshHomeMarkers();
     this.ui.render(this.state);
 
@@ -111,10 +144,12 @@ export class App {
       this.upgradePanel.refresh();
       this.hud.refresh();
       this.rebuildSurfaceIfNeeded();
+      this.rebuildMoonOutpostIfNeeded();
       this.refreshHomeMarkers();
       this.ui.render(this.state);
     });
     this.rebuildSurfaceIfNeeded();
+    this.rebuildMoonOutpostIfNeeded();
 
     // Label clicks (delegated)
     this.labelLayer.addEventListener('click', (e) => {
@@ -124,7 +159,14 @@ export class App {
       const kind = target.dataset.kind ?? '';
       const sysId = target.dataset.systemId ?? '';
       const plId = target.dataset.planetId;
+      const mnId = target.dataset.moonId;
       if (!sysId) return;
+      // W4-E: moon-claim mode — the only thing a moon click does is claim
+      // the outpost moon (when applicable). Otherwise moons aren't navigable.
+      if (kind === 'moon' && mnId && this.empire.needsOutpostMoonChoice()) {
+        this.empire.claimOutpostMoon(mnId);
+        return;
+      }
       if (kind === 'system') {
         this.navigateTo({ kind: 'system', systemId: sysId, planetId: null });
       } else if (kind === 'planet' && plId) {
@@ -292,21 +334,60 @@ export class App {
   }
 
   // Push current home/owned state to the label manager and breadcrumb UI so
-  // the HOME / HOME SYSTEM badges stay in sync with the empire.
+  // the HOME / HOME SYSTEM / claim-flow badges stay in sync with the empire.
   private refreshHomeMarkers(): void {
-    const homeSystemId = this.empire.state.homeSystemId;
-    const homePlanetId = this.empire.state.homePlanetId;
-    const fullClaimed = this.empire.isHomeSystemFullyClaimed();
+    const st = this.empire.state;
+    const homeSystemId = st.homeClaimed ? st.homeSystemId : '';
+    const homePlanetId = st.homeClaimed ? st.homePlanetId : '';
+    const fullClaimed = st.homeClaimed && this.empire.isHomeSystemFullyClaimed();
+
+    // Eligible homeworlds — only computed before the player claims one, to
+    // avoid lighting up rocky planets across the galaxy after claim.
+    const eligibleHomeworlds = new Set<string>();
+    if (!st.homeClaimed) {
+      for (const s of this.galaxy.data.systems) {
+        for (const p of s.planets) {
+          if (this.empire.isHomeworldEligible(p)) eligibleHomeworlds.add(p.id);
+        }
+      }
+    }
+
+    // Awaiting moon choice — pre-claim this is empty; post-Moon-Outpost-pre-
+    // moon-pick, every moon of the home planet glows so the player sees where
+    // to click.
+    const awaitingMoon = this.empire.needsOutpostMoonChoice() ? homePlanetId : '';
+
     this.labels.markHome({
       homePlanetId,
       homeSystemId,
-      ownedPlanets: new Set(this.empire.state.ownedPlanets),
+      ownedPlanets: new Set(st.ownedPlanets),
       homeSystemFullyClaimed: fullClaimed,
+      eligibleHomeworlds,
+      awaitingMoonChoiceForPlanet: awaitingMoon,
+      outpostMoonId: st.outpostMoonId,
     });
     this.ui.setHomeContext({
-      systemId: homeSystemId,
-      planetId: homePlanetId,
+      systemId: homeSystemId || null,
+      planetId: homePlanetId || null,
       fullSystemClaimed: fullClaimed,
+    });
+    this.ui.setEmpireContext({
+      homeClaimed: st.homeClaimed,
+      needsMoonChoice: this.empire.needsOutpostMoonChoice(),
+      isHomeworldEligible: (planetId: string) => {
+        for (const s of this.galaxy.data.systems) {
+          for (const p of s.planets) {
+            if (p.id === planetId) return this.empire.isHomeworldEligible(p);
+          }
+        }
+        return false;
+      },
+      claimHomeworld: (planetId: string) => {
+        if (this.empire.claimHomeworld(planetId)) {
+          const sysId = this.empire.state.homeSystemId;
+          this.navigateTo({ kind: 'planet', systemId: sysId, planetId });
+        }
+      },
     });
   }
 
@@ -343,6 +424,47 @@ export class App {
     this.surfacePlanetId = planetData.id;
   }
 
+  // Wave 4-B/E — moon-outpost dome + space-elevator tether on the *chosen*
+  // moon. Builds only after the player has both bought `moon-outpost` and
+  // clicked a moon (W4-E claim flow). Cheap-skips when nothing changed.
+  private rebuildMoonOutpostIfNeeded(): void {
+    const cfg = moonOutpostConfig(this.empire);
+    const ctx = this.empire.outpostMoonContext();
+
+    const samePlanet = ctx ? this.moonOutpostPlanetId === ctx.planet.id : this.moonOutpostPlanetId === null;
+    const sameMoon = cfg.moonId === this.moonOutpostMoonId;
+    const sameElevator = cfg.hasElevator === this.moonOutpostHasElevator;
+    const wantsHandle = cfg.hasOutpost && !!ctx;
+    const haveHandle = !!this.moonOutpost;
+
+    if (sameMoon && samePlanet && sameElevator && wantsHandle === haveHandle) return;
+
+    if (this.moonOutpost) {
+      disposeMoonOutpost(this.moonOutpost);
+      this.moonOutpost = null;
+    }
+
+    if (wantsHandle && ctx) {
+      const sys = this.galaxy.systems.get(ctx.systemId);
+      const planetHandle = sys?.planets.find((p) => p.data.id === ctx.planet.id);
+      const moonHandle = planetHandle && cfg.moonId
+        ? findOutpostMoon(planetHandle, cfg.moonId)
+        : null;
+      if (planetHandle && moonHandle) {
+        const handle = makeMoonOutpost(planetHandle, moonHandle, this.empire);
+        if (handle) {
+          planetHandle.pivot.add(handle.planetSideGroup);
+          moonHandle.mesh.add(handle.moonSideGroup);
+          this.moonOutpost = handle;
+        }
+      }
+    }
+
+    this.moonOutpostHasElevator = cfg.hasElevator;
+    this.moonOutpostPlanetId = ctx?.planet.id ?? null;
+    this.moonOutpostMoonId = cfg.moonId;
+  }
+
   private onResize(): void {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -362,6 +484,13 @@ export class App {
     this.upgradePanel.tickLive(performance.now());
     if (this.surface) {
       updateSurface(this.surface, dt, this.empire.computeMetrics());
+    }
+    if (this.moonOutpost) {
+      const inHomeSystem =
+        this.empire.state.homeClaimed &&
+        this.state.systemId === this.empire.state.homeSystemId;
+      setMoonOutpostVisible(this.moonOutpost, inHomeSystem);
+      updateMoonOutpost(this.moonOutpost, dt);
     }
 
     // 1. Advance the world first. Slow galactic rotation around the central

@@ -1,0 +1,107 @@
+Section,Chain,Tier,Effect,Old Value,New Value,Notes
+PlanetIncome,rocky.primary,-,metal/s,3,3,unchanged
+PlanetIncome,rocky.secondary,-,water/s,1.5,1.5,unchanged
+PlanetIncome,ocean.primary,-,water/s,3,3,unchanged
+PlanetIncome,ocean.secondary,-,gas/s,1.5,1.5,unchanged
+PlanetIncome,gas.primary,-,gas/s,3,3,unchanged
+PlanetIncome,gas.secondary,-,plasma/s,1.5,1.5,unchanged
+PlanetIncome,ice.primary,-,crystal/s,3,3,unchanged
+PlanetIncome,ice.secondary,-,water/s,1.5,1.5,unchanged
+PlanetIncome,lava.primary,-,plasma/s,3,3,unchanged
+PlanetIncome,lava.secondary,-,metal/s,1.5,1.5,unchanged
+PlanetIncome,desert.primary,-,silicon/s,3,3,unchanged
+PlanetIncome,desert.secondary,-,metal/s,1.5,1.5,unchanged
+PlanetIncome,toxic.primary,-,chemical/s,3,3,unchanged
+PlanetIncome,toxic.secondary,-,gas/s,1.5,1.5,unchanged
+,,,,,,
+Constants,SYNERGY_PER_PLANET,-,multiplier,0.20,0.20,kept
+Constants,SYSTEM_TIER_BASE,-,multiplier,100,100,kept
+Constants,BASE_STORAGE_CAP,-,units,1000,1500,bumped 50% so Phase 3 cost fits at base
+Constants,MOON_OUTPOST_INCOME,-,crystal/s,5,5,per chosen moon (was per all moons of all owned planets)
+,,,,,,
+Formula,droneThroughput,-,formula,(1 + 0.05*N) * cargoMul * speedMul,1 + 0.05*N + cargoAdd + speedAdd,additive instead of multiplicative — kills the ×4900 explosion
+,,,,,,
+Mining,Metal Refinery / per resource,I,rate-mul,+25%,+10%,reduced
+Mining,Metal Refinery / per resource,II,rate-mul,+50%,+20%,reduced
+Mining,Metal Refinery / per resource,III,rate-mul,+100%,+30%,reduced
+Mining,Metal Refinery / per resource,IV,rate-mul,+200%,+50%,reduced
+Mining,Metal Refinery / per resource,V,rate-mul,+400%,+70%,reduced
+Mining,Metal Refinery / per resource,VI,rate-mul,+800%,+100%,reduced (max sum +280% = ×3.8 instead of ×16.75)
+,,,,,,
+Logistics,Refinery,I,global-mul,+10%,+10%,kept tier I juicy
+Logistics,Refinery,II,global-mul,+20%,+15%,reduced
+Logistics,Refinery,III,global-mul,+40%,+20%,reduced
+Logistics,Refinery,IV,global-mul,+80%,+25%,reduced
+Logistics,Refinery,V,global-mul,+160%,+30%,reduced
+Logistics,Refinery,VI,global-mul,+320%,+40%,reduced (max sum +140%)
+,,,,,,
+Tech,Industrial Doctrine,I,global-mul,+20%,+10%,reduced
+Tech,Industrial Doctrine,II,global-mul,+40%,+15%,reduced
+Tech,Industrial Doctrine,III,global-mul,+80%,+20%,reduced
+Tech,Industrial Doctrine,IV,global-mul,+150%,+30%,reduced
+Tech,Industrial Doctrine,V,global-mul,+300%,+40%,reduced
+Tech,Industrial Doctrine,VI,global-mul,+600%,+55%,reduced (max sum +170%; combined globalMul max ×4.1)
+,,,,,,
+Logistics,Storage Bays,I,storage-mul,+100%,+50%,reduced
+Logistics,Storage Bays,II,storage-mul,+200%,+100%,reduced
+Logistics,Storage Bays,III,storage-mul,+500%,+200%,reduced
+Logistics,Storage Bays,IV,storage-mul,+1200%,+400%,reduced
+Logistics,Storage Bays,V,storage-mul,+3000%,+800%,reduced
+Logistics,Storage Bays,VI,storage-mul,+8000%,+1600%,reduced
+,,,,,,
+Tech,Storage Doctrine,I-VI,storage-mul,50/200/1000/5000/25000/100000,50/200/1000/5000/25000/100000,kept (storage = ceiling not multiplier on rate)
+,,,,,,
+Logistics,Auto-Sort,I,drone-cargo,+20%,+5%,reduced
+Logistics,Auto-Sort,II,drone-cargo,+40%,+5%,reduced
+Logistics,Auto-Sort,III,drone-cargo,+80%,+10%,reduced
+Logistics,Auto-Sort,IV,drone-cargo,+150%,+15%,reduced
+Logistics,Auto-Sort,V,drone-cargo,+300%,+20%,reduced
+Logistics,Auto-Sort,VI,drone-cargo,+600%,+25%,reduced (max sum +80%)
+,,,,,,
+Drones,Drone Cargo,I,drone-cargo,+30%,+5%,reduced
+Drones,Drone Cargo,II,drone-cargo,+60%,+10%,reduced
+Drones,Drone Cargo,III,drone-cargo,+120%,+15%,reduced
+Drones,Drone Cargo,IV,drone-cargo,+240%,+20%,reduced
+Drones,Drone Cargo,V,drone-cargo,+480%,+30%,reduced
+Drones,Drone Cargo,VI,drone-cargo,+960%,+40%,reduced (max sum +120%; combined cargoAdd max +200%)
+,,,,,,
+Drones,Drone Engines,I,drone-speed,+20%,+5%,reduced
+Drones,Drone Engines,II,drone-speed,+40%,+5%,reduced
+Drones,Drone Engines,III,drone-speed,+80%,+10%,reduced
+Drones,Drone Engines,IV,drone-speed,+150%,+15%,reduced
+Drones,Drone Engines,V,drone-speed,+300%,+20%,reduced
+Drones,Drone Engines,VI,drone-speed,+600%,+25%,reduced (max sum +80%)
+,,,,,,
+Tech,Quantum Compute,I,drone-speed,+15%,+5%,reduced
+Tech,Quantum Compute,II,drone-speed,+30%,+5%,reduced
+Tech,Quantum Compute,III,drone-speed,+60%,+10%,reduced
+Tech,Quantum Compute,IV,drone-speed,+120%,+15%,reduced
+Tech,Quantum Compute,V,drone-speed,+240%,+20%,reduced
+Tech,Quantum Compute,VI,drone-speed,+480%,+25%,reduced (max sum +80%; combined speedAdd max +160%)
+,,,,,,
+Drones,Drone Fleet,I,drone-count,+2,+1,reduced
+Drones,Drone Fleet,II,drone-count,+3,+1,reduced
+Drones,Drone Fleet,III,drone-count,+5,+2,reduced
+Drones,Drone Fleet,IV,drone-count,+8,+2,reduced
+Drones,Drone Fleet,V,drone-count,+12,+3,reduced
+Drones,Drone Fleet,VI,drone-count,+18,+3,reduced (sum 12 instead of 48)
+,,,,,,
+Tech,Swarm Doctrine,I,drone-count,+3,+1,reduced
+Tech,Swarm Doctrine,II,drone-count,+5,+2,reduced
+Tech,Swarm Doctrine,III,drone-count,+8,+3,reduced
+Tech,Swarm Doctrine,IV,drone-count,+12,+4,reduced
+Tech,Swarm Doctrine,V,drone-count,+18,+5,reduced
+Tech,Swarm Doctrine,VI,drone-count,+25,+7,reduced (sum 22 instead of 71; total drone count cap 34 instead of 119)
+,,,,,,
+Milestones,Moon Outpost,-,cost,200M+100W,200M+100W,unchanged
+Milestones,Space Elevator,-,cost,1500M+800W+400C,1500M+800W+400C,unchanged
+Milestones,Fleet Shipyard,-,cost,8K+5K+3K,8K+5K+3K,unchanged
+Milestones,System Expansion,-,cost,40K+25K+15K,40K+25K+15K,unchanged
+Milestones,Wormhole Observatory,-,cost,250K+150K+100K,250K+150K+100K,unchanged
+Milestones,Wormhole Transit,-,cost,2M+1.5M+1M,2M+1.5M+1M,unchanged
+Milestones,Trade Hub,-,cost,50M+30M+20M+10M×4,50M+30M+20M+10M×4,unchanged (kept high; only reachable via T2 system ×100 boost)
+,,,,,,
+SingleStarRate,1 rocky planet metal/s @ everything maxed,-,/s,~5700000,~350,was 5.7 MILLION/s — now ~350/s. Trade Hub progression now requires multi-planet + T2 system.
+SingleStarRate,1 rocky planet metal/s @ early game (Drone Fleet I-III),-,/s,~30,~5,more honest pacing
+HomeSystemFullClaim,7 planets fully claimed metal/s peak,-,/s,~14000000,~2300,still huge but T2 (×100) pumps it to 230K/s for endgame
+T2SystemRate,1 T2 system planet metal/s peak,-,/s,~570000000,~35000,Trade Hub 50M / 35K = 24 minutes per resource

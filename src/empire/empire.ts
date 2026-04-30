@@ -2,6 +2,7 @@
 
 import type { GalaxyData, PlanetData, SystemData } from '../galaxy/types';
 import {
+  BASE_STORAGE_CAP,
   MOON_OUTPOST_INCOME,
   PLANET_INCOME,
   RESOURCE_KEYS,
@@ -12,10 +13,6 @@ import {
 } from './types';
 import type { EmpireState, PlanetIncome, ResourceBag, ResourceKey, UnlockFlag, UpgradeNode } from './types';
 import { CORE_NODE_ID, NODES_BY_ID, UPGRADE_NODES, canAfford, subtractCost } from './upgrades';
-
-// Big enough that early millions don't immediately hit the ceiling. Storage
-// upgrades scale this further.
-const BASE_STORAGE_CAP = 1000;
 
 export interface EmpireMetrics {
   rates: ResourceBag;
@@ -48,14 +45,16 @@ export class Empire {
       // Heal old saves by backfilling missing fields.
       if (!this.state.unlockedNodes) this.state.unlockedNodes = [];
       if (!this.state.unlocks) this.state.unlocks = [];
-      if (!this.state.ownedPlanets) this.state.ownedPlanets = [this.state.homePlanetId];
-      if (!this.state.claimedSystems) this.state.claimedSystems = { [this.state.homeSystemId]: 1 };
+      if (!this.state.ownedPlanets) this.state.ownedPlanets = [];
+      if (!this.state.claimedSystems) this.state.claimedSystems = {};
+      if (this.state.outpostMoonId === undefined) this.state.outpostMoonId = null;
+      if (this.state.homeClaimed === undefined) {
+        this.state.homeClaimed = !!this.state.homePlanetId;
+      }
     } else {
-      this.state = createFreshEmpire(galaxy, seed);
+      this.state = createEmptyEmpire(seed);
       this.save();
     }
-    // The Empire Core is the always-owned root of the skill tree. Make sure it
-    // is in unlockedNodes regardless of save vintage.
     if (!this.state.unlockedNodes.includes(CORE_NODE_ID)) {
       this.state.unlockedNodes.unshift(CORE_NODE_ID);
     }
@@ -64,11 +63,33 @@ export class Empire {
   // --- Read-only getters ----------------------------------------------------
 
   homeSystem(): SystemData | null {
+    if (!this.state.homeClaimed) return null;
     return this.galaxy.systems.find((s) => s.id === this.state.homeSystemId) ?? null;
   }
   homePlanet(): PlanetData | null {
+    if (!this.state.homeClaimed) return null;
     const sys = this.homeSystem();
     return sys?.planets.find((p) => p.id === this.state.homePlanetId) ?? null;
+  }
+  // True for any rocky planet that has at least one moon — eligible homeworld.
+  isHomeworldEligible(planet: PlanetData): boolean {
+    return planet.type === 'rocky' && planet.moons.length > 0;
+  }
+  // Resolve the chosen outpost moon back to a planet/system pair so income can
+  // be tier-scaled and the renderer knows where to attach the dome.
+  outpostMoonContext(): { planet: PlanetData; systemId: string } | null {
+    if (!this.state.outpostMoonId) return null;
+    for (const s of this.galaxy.systems) {
+      for (const p of s.planets) {
+        if (!this.state.ownedPlanets.includes(p.id)) continue;
+        for (const m of p.moons) {
+          if (m.id === this.state.outpostMoonId) {
+            return { planet: p, systemId: s.id };
+          }
+        }
+      }
+    }
+    return null;
   }
   hasUnlock(flag: UnlockFlag): boolean {
     return this.state.unlocks.includes(flag);
@@ -105,7 +126,8 @@ export class Empire {
       const inc = PLANET_INCOME[p.type];
       if (inc.primary.resource === k || inc.secondary.resource === k) return true;
     }
-    if (k === MOON_OUTPOST_INCOME.resource && this.hasUnlock('moon-outpost') && this.state.ownedPlanets.length > 0) {
+    // Moon outpost only counts once a moon is actually chosen (W4-E claim).
+    if (k === MOON_OUTPOST_INCOME.resource && this.outpostMoonContext()) {
       return true;
     }
     return false;
@@ -144,7 +166,6 @@ export class Empire {
   computeMetrics(): EmpireMetrics {
     const rates = emptyBag();
     const produces = new Set<ResourceKey>();
-    const moonUnlocked = this.hasUnlock('moon-outpost');
     let planetCount = 0;
 
     // 1. Per-planet baseline income (primary + secondary), scaled by the
@@ -162,13 +183,17 @@ export class Empire {
       rates[inc.secondary.resource] += inc.secondary.rate * tierMul;
       produces.add(inc.primary.resource);
       produces.add(inc.secondary.resource);
+    }
 
-      // Moon outpost contribution (Phase 2). Each moon of an owned planet adds
-      // a flat resource stream, also scaled by system tier.
-      if (moonUnlocked && p.moons.length > 0) {
-        rates[MOON_OUTPOST_INCOME.resource] += p.moons.length * MOON_OUTPOST_INCOME.rate * tierMul;
-        produces.add(MOON_OUTPOST_INCOME.resource);
-      }
+    // 1b. Moon outpost contribution (W4-E). Only the player-chosen moon
+    //     contributes — was per-moon-of-every-owned-planet pre-W4-C, which
+    //     compounded badly into late-game crystal floods.
+    const outCtx = this.outpostMoonContext();
+    if (outCtx) {
+      const tier = this.tierOf(outCtx.systemId);
+      const tierMul = Math.pow(SYSTEM_TIER_BASE, tier - 1);
+      rates[MOON_OUTPOST_INCOME.resource] += MOON_OUTPOST_INCOME.rate * tierMul;
+      produces.add(MOON_OUTPOST_INCOME.resource);
     }
 
     // 2. Tally upgrade contributions.
@@ -196,11 +221,14 @@ export class Empire {
     }
 
     // 3. Synergy + drone throughput.
+    //    droneThroughput is *additive* across (count, cargo, speed) — pre-W4-C
+    //    it was multiplicative which compounded to ×4900 at full upgrade. The
+    //    new formula tops out around ×7-8 even with everything maxed.
     const synergy = 1 + SYNERGY_PER_PLANET * planetCount;
-    const droneSpeed = 1 + droneSpeedAdd;
-    const droneCargo = 1 + droneCargoAdd;
+    const droneSpeed = 1 + droneSpeedAdd;   // surface.ts uses this directly
+    const droneCargo = 1 + droneCargoAdd;   // exposed for HUD/tooltips
     const globalMul = 1 + globalMulAdd;
-    const droneThroughput = (1 + 0.05 * droneCount) * droneCargo * droneSpeed;
+    const droneThroughput = 1 + 0.05 * droneCount + droneCargoAdd + droneSpeedAdd;
 
     // 4. Apply multipliers only to resources the empire actually produces.
     //    Anything not produced stays at zero — even if a rate-add upgrade
@@ -258,9 +286,58 @@ export class Empire {
   }
 
   reset(): void {
-    this.state = createFreshEmpire(this.galaxy, this.seed);
+    this.state = createEmptyEmpire(this.seed);
+    this.state.unlockedNodes.unshift(CORE_NODE_ID);
     this.save();
     this.emit();
+  }
+
+  // W4-D — first-time homeworld claim. Validates eligibility, populates the
+  // empire's home/owned/system fields, and emits so UI can react.
+  claimHomeworld(planetId: string): boolean {
+    if (this.state.homeClaimed) return false;
+    let foundSys: SystemData | null = null;
+    let foundPlanet: PlanetData | null = null;
+    for (const s of this.galaxy.systems) {
+      for (const p of s.planets) {
+        if (p.id === planetId) { foundSys = s; foundPlanet = p; break; }
+      }
+      if (foundPlanet) break;
+    }
+    if (!foundPlanet || !foundSys) return false;
+    if (!this.isHomeworldEligible(foundPlanet)) return false;
+    this.state.homeClaimed = true;
+    this.state.homeSystemId = foundSys.id;
+    this.state.homePlanetId = foundPlanet.id;
+    this.state.ownedPlanets = [foundPlanet.id];
+    this.state.claimedSystems = { [foundSys.id]: 1 };
+    this.save();
+    this.emit();
+    return true;
+  }
+
+  // W4-E — set the chosen outpost moon. Only valid when `moon-outpost` is
+  // unlocked AND the moon belongs to one of the empire's owned planets.
+  // Re-clicking another moon moves the outpost (cheap reassignment).
+  claimOutpostMoon(moonId: string): boolean {
+    if (!this.hasUnlock('moon-outpost')) return false;
+    let valid = false;
+    for (const pid of this.state.ownedPlanets) {
+      const p = findPlanet(this.galaxy, pid);
+      if (!p) continue;
+      if (p.moons.some((m) => m.id === moonId)) { valid = true; break; }
+    }
+    if (!valid) return false;
+    this.state.outpostMoonId = moonId;
+    this.save();
+    this.emit();
+    return true;
+  }
+
+  // True iff Moon Outpost is unlocked but the player hasn't picked a moon
+  // yet — the UI uses this to surface the "choose a moon" prompt.
+  needsOutpostMoonChoice(): boolean {
+    return this.hasUnlock('moon-outpost') && !this.state.outpostMoonId;
   }
 
   // Debug-only: drop `amount` into every resource, bypassing storage caps.
@@ -300,44 +377,23 @@ function loadFromStorage(seed: number): EmpireState | null {
   } catch { return null; }
 }
 
-function createFreshEmpire(galaxy: GalaxyData, seed: number): EmpireState {
-  const start = pickStartingPlanet(galaxy);
-  const fallback: { systemId: string; planetId: string } | null =
-    start
-    ?? (galaxy.systems[0] && galaxy.systems[0].planets[0]
-        ? { systemId: galaxy.systems[0].id, planetId: galaxy.systems[0].planets[0].id }
-        : null);
-  if (!fallback) throw new Error('Galaxy has no planets to bootstrap an empire on.');
+// W4-D: a brand-new save starts with no homeworld claimed. The player picks
+// their own first world from galaxy view; until then the empire is dormant
+// (homeClaimed=false → no income, no upgrade panel access, no markers).
+function createEmptyEmpire(seed: number): EmpireState {
   return {
     seed,
-    homeSystemId: fallback.systemId,
-    homePlanetId: fallback.planetId,
+    homeClaimed: false,
+    homeSystemId: '',
+    homePlanetId: '',
     resources: emptyBag(),
     unlockedNodes: [],
-    ownedPlanets: [fallback.planetId],
+    ownedPlanets: [],
     unlocks: [],
-    claimedSystems: { [fallback.systemId]: 1 },
+    claimedSystems: {},
+    outpostMoonId: null,
     lastSavedAt: Date.now(),
   };
-}
-
-// Always pick a rocky, moon-bearing planet so every player starts with the
-// same resource profile (metal + water) and the rest of the cost catalogue
-// can assume that baseline. Temperate is preferred for flavour.
-function pickStartingPlanet(galaxy: GalaxyData): { systemId: string; planetId: string } | null {
-  type Cand = { systemId: string; planetId: string; score: number };
-  const cands: Cand[] = [];
-  for (const s of galaxy.systems) {
-    for (const p of s.planets) {
-      if (p.moons.length === 0) continue;
-      if (p.type !== 'rocky') continue;
-      const temperate = p.temperatureC >= -40 && p.temperatureC <= 60;
-      cands.push({ systemId: s.id, planetId: p.id, score: temperate ? 2 : 1 });
-    }
-  }
-  cands.sort((a, b) => b.score - a.score);
-  const best = cands[0];
-  return best ? { systemId: best.systemId, planetId: best.planetId } : null;
 }
 
 function findPlanet(galaxy: GalaxyData, planetId: string): PlanetData | null {

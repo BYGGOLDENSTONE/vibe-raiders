@@ -48,7 +48,7 @@ export class DebugPanel {
     resetBtn.addEventListener('click', () => {
       // Block accidental wipe — the save is per-galaxy-seed but still real.
       const ok = window.confirm(
-        'Reset empire?\n\nThis wipes all owned upgrades and resources, and re-picks the home planet. Galaxy itself stays the same.',
+        'Reset empire?\n\nThis wipes all owned upgrades, resources, and the home claim. You\'ll pick a new homeworld from scratch. Galaxy itself stays the same.',
       );
       if (!ok) return;
       this.empire.reset();
