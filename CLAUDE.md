@@ -2,18 +2,19 @@
 
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders (rename when convenient).
-> **Status:** Bare scaffold — Three.js renderer + ECS-lite world + PartyKit hub + Vibe Jam portal. No game on top yet.
+> **Status:** Wave 0 complete — contracts locked, postprocessing pipeline online, PartyKit shared-galaxy authority booting (seed persisted, empire snapshot map, 256-event ring buffer, ping/pong time sync). No gameplay yet — Wave 1 next.
 
 ---
 
 ## Resume here (start of next session)
 
-1. Read this file end-to-end so the locked-in tech rules and what's already wired are clear.
-2. `git log --oneline -10` to see recent history.
-3. `npm run dev` (vite at http://localhost:5173) and optionally `npx partykit dev` (relay at :1999).
-4. The page boots into an empty grey ground plane with a gold "VIBE JAM" portal arch at `(-15, 1.4, -15)`. Click the portal label to test the webring outbound link.
-5. Multiplayer party panel appears top-left when the relay is reachable. Other connected clients render as translucent capsules with name labels.
-6. Decide on the next game with the user before writing any gameplay code.
+1. Read this file end-to-end. The locked tech rules + what's wired below tell you exactly what already exists.
+2. `git log --oneline -10` to see recent history; the latest commit message is the Wave 0 acceptance summary.
+3. `npm run dev` (vite, usually http://localhost:5173/ unless ports are busy) and `npx partykit dev` (relay at `localhost:1999`).
+4. The page boots into a near-black scene with a gold "VIBE JAM" portal arch glowing via SelectiveBloom + ACES Filmic. Console should log `[initGame] postprocessing chain ready (bloom + ACES + SMAA)` and `[multiplayer] connected to room "hub-1"`.
+5. Smoke-test PartyKit with `node` + `ws`: a `hello` returns a `welcome` whose `.game` payload includes `seed`, `serverTimeMs`, `yourSectorId`, `empires[]`, `lastEventId`. A `ping` returns a `pong` with `tServer`.
+6. Determinism check: `npx tsx scripts/test-seed.ts` prints 100 planets, 16/16 sectors with homes, same-seed → identical output.
+7. **Next up: Wave 1.** Dispatch 4 parallel subagents per the plan in `docs/IMPLEMENTATION_PLAN.md` § Wave 1 — each owns one folder under `src/game/galaxy/` or `src/game/shaders/`. Main context integrates after.
 
 ---
 
@@ -34,11 +35,11 @@ Read these planning docs before gameplay implementation **in this order**:
 
 High-level wave order (revised — multiplayer-first):
 
-1. Wave 0 — Lock contracts (types, EventMap, protocol channels, time-sync handshake) and install the tech stack (postprocessing, troika-three-text, @three.ez/instanced-mesh, vite-plugin-glsl).
-2. Wave 1 — Shared galaxy 3D: procedural nebula, starfield, 100 planets from seed, planet/wormhole shaders, two tabs see each other's empires before any economy.
-3. Wave 2 — Local economy on top: Credits + Ore, upgrades, internal trade routes with cargo trajectory broadcast.
-4. Wave 3 — UI shell with visual polish (postprocessing, troika labels, identity-color borders).
-5. Wave 4 — Cross-player trade routes (bilateral, gradient arcs, consent flow).
+1. ✅ **Wave 0 (DONE)** — Contracts locked (types, EventMap, protocol channels, time-sync handshake) and the tech stack is installed (postprocessing, three-stdlib, troika-three-text, @three.ez/instanced-mesh, tweakpane, stats-gl, vite-plugin-glsl). Composer pipeline (Bloom + ACES + SMAA) is live. PartyKit serves `welcome.game` with seed/empires/ringbuffer.
+2. **Wave 1 (NEXT)** — Shared galaxy 3D: procedural nebula, starfield, 100 planets from seed, planet/wormhole shaders, two tabs see each other's empires before any economy.
+3. Wave 2 — Local economy on top: Credits + Ore, upgrade tree, synergies, internal trade routes with cargo trajectory broadcast.
+4. Wave 3 — UI shell with visual polish (postprocessing tuned, troika labels, identity-color borders).
+5. Wave 4 — Cross-player trade routes (bilateral, gradient arcs, consent flow) + Tier 2/3 unlocks (Refinery, Foundry, Tech tree).
 6. Wave 5 — Galactic map view, leaderboard polish, galactic events.
 7. Wave 6 — Tune first 10 minutes, synth audio, build/deploy.
 
@@ -62,31 +63,50 @@ High-level wave order (revised — multiplayer-first):
 ```
 src/
 ├── core/                 ECS-lite (game-agnostic)
-│   ├── types.ts          Entity, FrameContext, EventMap (only entity:spawn/despawn for now)
+│   ├── types.ts          Entity, FrameContext, full EventMap (galaxy/economy/multiplayer/ui events)
 │   ├── entity.ts         createEntity, setComponent, getComponent
 │   ├── world.ts          spawn/despawn, query, addSystem, on/emit, tick
 │   └── index.ts          re-exports
 ├── net/
-│   └── protocol.ts       generic ClientMessage / ServerMessage (hello + input + welcome + state)
+│   └── protocol.ts       Three-channel protocol: legacy hello/input + welcome.game payload +
+│                         GameEvent (planet/route/ship/galactic) + ping/pong + route flow
 ├── game/
-│   ├── state.ts          GameContext + gameState (player, multiplayerConnected,
-│   │                     partyMemberIds, paused, timeScale, renderHook)
+│   ├── state.ts          GameContext + gameState (now includes serverTimeOffsetMs, galaxySeed,
+│   │                     selfPlayerId, selfSectorId) + sharedNow() helper. resizeHook added
+│   │                     so EffectComposer follows window resize.
+│   ├── initGame.ts       Wave dispatcher; Wave 0 wires EffectComposer (SelectiveBloom + ACES + SMAA)
+│   ├── economy/          Pure data + balance (no Three.js imports — server safe-imports)
+│   │   ├── types.ts      Resource/Planet/Route/Ship/Upgrade/Building/Empire types + LIMITS + GALAXY
+│   │   └── seed.ts       Mulberry32 + Mitchell sector placement + donor-rebalanced 100-planet
+│   │                     deterministic generator. All 16 sectors guaranteed a home.
 │   └── portal/           Vibe Jam webring entry/exit (gold outbound, cyan return arch)
 ├── multiplayer/          PartyKit client (room hub-1) + ghost players + party panel +
 │                         name prompt + 6-retry connection
-└── main.ts               boot Three.js + World + portal + multiplayer
+├── main.ts               boot Three.js renderer (postprocessing-tuned: antialias off,
+│                         NoToneMapping, SRGB) + World + initGame(ctx) + portal + multiplayer
+└── vite-env.d.ts         glsl/vert/frag module shims for vite-plugin-glsl
 
 partykit/
-└── server.ts             generic 16-player relay, 10 Hz state broadcast
+└── server.ts             16-player relay. Tier-A galaxy seed in room.storage,
+                          Tier-B empire snapshots in DO memory, 256-event ring buffer,
+                          Cristian ping/pong, soft-eviction grace 60s, sector assignment.
+
+scripts/
+└── test-seed.ts          Determinism + sector-coverage check. `npx tsx scripts/test-seed.ts`.
 ```
 
 ---
 
 ## What's wired and stable
 
-- **ECS world** — `World.spawn / despawn / query / addSystem / on / emit / tick`. Add new events to `EventMap` in `src/core/types.ts` upfront so subagents don't collide.
+- **ECS world** — `World.spawn / despawn / query / addSystem / on / emit / tick`.
+- **EventMap** locked at Wave 0 with the full galaxy/economy/multiplayer/ui surface. Add new events here when extending; subagents must not redefine the bus.
+- **Postprocessing** — `EffectComposer` with `SelectiveBloomEffect` (mipmap blur, threshold 0.85), ACES Filmic tone mapping, SMAA. Wired via `ctx.renderHook` and `ctx.resizeHook`. Existing gold portal arch already blooms.
 - **Multiplayer hub** — connects to `localhost:1999` in dev or `gamejam.example.partykit.dev` in prod (placeholder, see deploy checklist). Renders remote players as translucent capsules + name labels. Local-only "party" tagging via the panel rows.
+- **PartyKit shared-galaxy authority** — `welcome` payload now includes both the legacy `snapshot.players` (drives ghosts) AND a `game` payload with `seed`, `serverTimeMs`, `yourSectorId`, `empires[]`, `shipsInFlight[]`, `activeGalacticEvents[]`, `lastEventId`. Galaxy seed is persisted in `room.storage` so it survives server restarts. Sector assignment maps each connecting player to a free sector 0..15.
+- **Time sync** — `client → server: { type:'ping', t0 }` returns `{ type:'pong', t0, tServer }`. Client should run 5 pings, take median offset, write to `gameState.serverTimeOffsetMs`. All trajectory math should use `sharedNow()` from `src/game/state.ts`.
 - **Vibe Jam portal** — outbound to `vibej.am/portal/2026` and return arch when arriving via `?portal=true&ref=...&username=...&color=...`. Trigger by clicking the label OR walking within 1.8m (proximity needs `gameState.player` to be set).
+- **Deterministic galaxy generator** — `generateGalaxy(seed)` returns identical 100-planet layout, sector centers, neutral assignments, names, kinds. Every of 16 sectors has at least one planet flagged `isHomeOfSector`. Server picks the seed once, all clients regenerate locally — no per-frame galaxy bandwidth.
 
 ---
 
