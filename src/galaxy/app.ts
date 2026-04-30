@@ -10,6 +10,7 @@ import { Empire } from '../empire/empire';
 import { ResourceHUD } from '../empire/hud';
 import { UpgradePanel } from '../empire/panel';
 import { DebugPanel } from '../empire/debug';
+import { makeSurface, updateSurface, disposeSurface, surfaceConfig, type SurfaceHandle } from '../empire/surface';
 
 const GALAXY_SEED = 20260430;
 
@@ -32,6 +33,10 @@ export class App {
   private empire: Empire;
   private hud: ResourceHUD;
   private upgradePanel: UpgradePanel;
+  private surface: SurfaceHandle | null = null;
+  private surfaceFactoryCount = -1;
+  private surfaceDroneCount = -1;
+  private surfacePlanetId: string | null = null;
   private state: LayerState = { kind: 'galaxy', systemId: null, planetId: null };
   private clock = new THREE.Clock();
   private canvas: HTMLCanvasElement;
@@ -104,7 +109,9 @@ export class App {
     this.empire.subscribe(() => {
       this.upgradePanel.refresh();
       this.hud.refresh();
+      this.rebuildSurfaceIfNeeded();
     });
+    this.rebuildSurfaceIfNeeded();
 
     // Label clicks (delegated)
     this.labelLayer.addEventListener('click', (e) => {
@@ -281,6 +288,39 @@ export class App {
     }
   }
 
+  // Build / rebuild the home-planet surface visuals. Cheap-skips when the
+  // factory and drone count haven't changed since the last call so a routine
+  // upgrade purchase doesn't tear the meshes down for nothing.
+  private rebuildSurfaceIfNeeded(): void {
+    const planetData = this.empire.homePlanet();
+    if (!planetData) return;
+    const sys = this.galaxy.systems.get(this.empire.state.homeSystemId);
+    if (!sys) return;
+    const planetHandle = sys.planets.find((p) => p.data.id === planetData.id);
+    if (!planetHandle) return;
+
+    const cfg = surfaceConfig(this.empire, planetData);
+    const samePlanet = this.surfacePlanetId === planetData.id;
+    if (
+      samePlanet &&
+      cfg.factoryCount === this.surfaceFactoryCount &&
+      cfg.droneCount === this.surfaceDroneCount &&
+      this.surface !== null
+    ) {
+      return;
+    }
+
+    if (this.surface) {
+      disposeSurface(this.surface);
+      this.surface = null;
+    }
+    this.surface = makeSurface(planetData, this.empire);
+    planetHandle.body.add(this.surface.group);
+    this.surfaceFactoryCount = cfg.factoryCount;
+    this.surfaceDroneCount = cfg.droneCount;
+    this.surfacePlanetId = planetData.id;
+  }
+
   private onResize(): void {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -298,6 +338,9 @@ export class App {
     this.empire.tick(dt);
     this.hud.update(dt);
     this.upgradePanel.tickLive(performance.now());
+    if (this.surface) {
+      updateSurface(this.surface, dt, this.empire.computeMetrics());
+    }
 
     // 1. Advance the world first. Slow galactic rotation around the central
     //    black hole (~10 min/revolution), then planet/moon orbits.

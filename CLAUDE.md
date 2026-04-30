@@ -3,7 +3,7 @@
 > **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 2.5 (upgrade UX redesign) complete — pannable graph replaced by a Branch Browser modal with buy VFX. Wave 2 economy/state still in place. Galaxy/system/planet view from earlier waves still works. Surface visuals (drones, factories, space elevators) and multiplayer not yet wired.
+> **Status:** Wave 3 complete — owned home planet now shows procedural factories (3 base + one per owned mining tier, capped at 9) and a swarm of emissive drones (8 + 6 × drone level) ferrying between them. Wave 2.5 / Wave 2 / Wave 1 still in place. Space elevators and multiplayer not yet wired.
 
 ---
 
@@ -53,6 +53,16 @@ The pannable skill-tree canvas was scrapped in favour of a **Branch Browser** mo
 - **HUD chips** carry `data-resource="<key>"` so VFX can target them.
 - **Modal** still keyboard-friendly: Esc closes, backdrop click closes, × button closes. Scroll inside the rail and detail pane independently.
 - **Deleted**: `em-tree-*`, `em-node-*` styles + the panning logic. `panel.ts` is now ~290 lines without any drag/pan code.
+
+### Wave 3 — planet-surface visuals (this session)
+
+Owned home planet now reads as an active industrial world rather than a bare procedural sphere:
+
+- **Factories** (`src/empire/surface.ts`) — 3 baseline + 1 per unlocked mining-rate tier for the planet's resource (cap 9). Procedural towers (BoxGeometry body + cap + antenna), oriented to the surface normal so they stand upright wherever they land. Cap colour matches the resource's HUD chip. Bodies live under `planet.body`, so they rotate with the axial spin like the rest of the planet.
+- **Drones** — `8 + 6 × drone-count level` (so the swarm reads as dense even at level 0). Each drone slerp-interpolates between two random factory anchors with a sine-loft so paths arc above the surface. Speed scales with `metrics.droneSpeed`. `MeshBasicMaterial` + additive blending gives an emissive look without needing extra lights.
+- **Deterministic placement** — factory positions come from a Fibonacci spiral seeded by `hash(planet.id + '|surface')`, jittered by RNG so the same planet always produces the same skyline.
+- **Lifecycle** (`app.ts`) — `rebuildSurfaceIfNeeded()` runs on construction and on every `empire.subscribe` emit, but cheap-skips when both `factoryCount` and `droneCount` are unchanged (no GC churn from unrelated purchases). `disposeSurface` drops geometries/materials when rebuilding.
+- **Tick** — `updateSurface(handle, dt, metrics)` advances drone `t` parameters in the main render loop. ~30 drones × tiny sphere mesh, no perf concern.
 
 ---
 
@@ -108,13 +118,14 @@ gamejam/
 │   │   ├── labels.ts
 │   │   ├── picking.ts
 │   │   └── ui.ts                   breadcrumb, layer switcher, detail panel
-│   └── empire/                     Wave-2 gameplay layer
+│   └── empire/                     Wave-2/3 gameplay layer
 │       ├── types.ts                ResourceKey, EmpireState, UpgradeNode
 │       ├── upgrades.ts             ~150-node skill tree catalogue (grouped into chains by panel.ts)
 │       ├── empire.ts               state, tick, save/load, starting planet selection
 │       ├── hud.ts                  top resource bar + Upgrades launcher button (chips carry data-resource)
 │       ├── panel.ts                Branch Browser modal — left chain rail + tier-card detail pane
-│       └── vfx.ts                  buy effects: drain particles, burst, UNLOCKED text, tier-card flash
+│       ├── vfx.ts                  buy effects: drain particles, burst, UNLOCKED text, tier-card flash
+│       └── surface.ts              Wave-3 — factory towers + drone swarm anchored to home planet
 └── node_modules/
 ```
 
@@ -137,7 +148,7 @@ gamejam/
 
 | Wave | Goal |
 |---|---|
-| **W3** | Planet-surface visuals: procedural factory meshes anchored to the planet (rotate with axial spin), drones zipping between them. System view shows them as emissive glow + connection lines. |
+| **W3** | ✅ Complete. Procedural factory meshes + drone swarm on home planet. System-view emissive glow / connection lines deferred to W5 once multi-planet ownership exists. |
 | **W4** | Phase 2 — Moon outpost + Space Elevator. Drone shuttles travel along the elevator; visible from system view. **Bundles a progression rebalance** (see "Known issue" below). |
 | **W5** | Phase 3 — System Expansion: colonise other planets in the home system, per-planet-type production, inter-planet drone trails. |
 | **W6** | PartyKit relay — replicate each player's public empire state (claimed system, owned planets, owned upgrades). Other players' systems show their progress visually. |
