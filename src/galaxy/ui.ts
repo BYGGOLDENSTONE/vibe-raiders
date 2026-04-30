@@ -48,7 +48,6 @@ export class UI {
   private breadcrumb: HTMLDivElement;
   private switcher: HTMLDivElement;
   private panel: HTMLDivElement;
-  private objectList: HTMLDivElement;
   private hint: HTMLDivElement;
   private galaxy: GalaxyHandle;
   private navigate: NavigateFn;
@@ -68,9 +67,6 @@ export class UI {
     this.panel = el('div', 'gx-panel');
     root.appendChild(this.panel);
 
-    this.objectList = el('div', 'gx-objectlist');
-    root.appendChild(this.objectList);
-
     this.hint = el('div', 'gx-hint');
     this.hint.innerHTML = `
       <span><strong>Left click</strong> select</span>
@@ -84,7 +80,6 @@ export class UI {
     this.renderBreadcrumb(layer);
     this.renderSwitcher(layer);
     this.renderPanel(layer);
-    this.renderObjectList(layer);
   }
 
   // --- Breadcrumb ---
@@ -243,56 +238,6 @@ export class UI {
     `;
   }
 
-  // --- Object list ---
-  private renderObjectList(layer: LayerState): void {
-    let title = '';
-    let items: { id: string; name: string; meta: string; dot: string; selected: boolean; onClick: () => void }[] = [];
-
-    if (layer.kind === 'galaxy') {
-      // No list on the galaxy layer — the screen is the galaxy itself
-      this.objectList.style.display = 'none';
-      this.objectList.innerHTML = '';
-      return;
-    }
-    this.objectList.style.display = '';
-
-    if (layer.systemId) {
-      const sys = this.galaxy.systems.get(layer.systemId);
-      if (!sys) {
-        this.objectList.innerHTML = '';
-        return;
-      }
-      title = `${sys.data.name} — planets`;
-      items = sys.data.planets.map((p) => ({
-        id: p.id,
-        name: p.name,
-        meta: PLANET_TYPE_LABEL[p.type] ?? p.type,
-        dot: colorCss(p.primaryColor),
-        selected: layer.kind === 'planet' && layer.planetId === p.id,
-        onClick: () => this.navigate({ kind: 'planet', systemId: sys.data.id, planetId: p.id }),
-      }));
-    }
-
-    this.objectList.innerHTML = `
-      <div class="gx-list-head">
-        <span class="gx-list-title">${escapeHtml(title)}</span>
-        <span class="gx-list-count">${items.length}</span>
-      </div>
-      <div class="gx-list-scroll" data-list></div>
-    `;
-    const scroll = this.objectList.querySelector('[data-list]') as HTMLDivElement;
-    items.forEach((it) => {
-      const btn = document.createElement('button');
-      btn.className = `gx-list-item${it.selected ? ' selected' : ''}`;
-      btn.innerHTML = `
-        <span class="gx-row-dot" style="background:${it.dot}"></span>
-        <span class="gx-row-name">${escapeHtml(it.name)}</span>
-        <span class="gx-row-type">${escapeHtml(it.meta)}</span>
-      `;
-      btn.addEventListener('click', it.onClick);
-      scroll.appendChild(btn);
-    });
-  }
 }
 
 function el(tag: string, cls: string): HTMLDivElement {

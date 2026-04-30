@@ -6,6 +6,11 @@ import { CameraController } from './camera-controller';
 import { LabelManager } from './labels';
 import { Picker } from './picking';
 import { UI } from './ui';
+import { Empire } from '../empire/empire';
+import { ResourceHUD } from '../empire/hud';
+import { UpgradePanel } from '../empire/panel';
+
+const GALAXY_SEED = 20260430;
 
 interface LayerCamPreset {
   distance: number;
@@ -23,6 +28,9 @@ export class App {
   private labels: LabelManager;
   private picker: Picker;
   private ui: UI;
+  private empire: Empire;
+  private hud: ResourceHUD;
+  private upgradePanel: UpgradePanel;
   private state: LayerState = { kind: 'galaxy', systemId: null, planetId: null };
   private clock = new THREE.Clock();
   private canvas: HTMLCanvasElement;
@@ -60,8 +68,11 @@ export class App {
     this.scene.add(ambient);
 
     // Galaxy
-    const data = generateGalaxy(20260430);
+    const data = generateGalaxy(GALAXY_SEED);
     this.galaxy = buildGalaxy(this.scene, data);
+
+    // Empire (gameplay state) — selects/loads home planet, starts the tick.
+    this.empire = new Empire(data, GALAXY_SEED);
 
     // Camera + controller
     this.controller = new CameraController(this.camera, this.canvas);
@@ -83,6 +94,15 @@ export class App {
     // UI
     this.ui = new UI(this.overlay, this.galaxy, (next) => this.navigateTo(next));
     this.ui.render(this.state);
+
+    // Empire UI: upgrade modal (hidden until launched), then HUD that
+    // owns the launcher button.
+    this.upgradePanel = new UpgradePanel(this.overlay, this.empire);
+    this.hud = new ResourceHUD(this.overlay, this.empire, this.upgradePanel);
+    this.empire.subscribe(() => {
+      this.upgradePanel.refresh();
+      this.hud.refresh();
+    });
 
     // Label clicks (delegated)
     this.labelLayer.addEventListener('click', (e) => {
@@ -269,6 +289,12 @@ export class App {
 
   private loop = (): void => {
     const dt = Math.min(this.clock.getDelta(), 0.05);
+
+    // 0. Tick empire economy (resource accumulation, autosave). Runs every
+    //    frame so HUD numbers animate smoothly; the actual save throttling
+    //    happens inside Empire.
+    this.empire.tick(dt);
+    this.hud.update(dt);
 
     // 1. Advance the world first. Slow galactic rotation around the central
     //    black hole (~10 min/revolution), then planet/moon orbits.

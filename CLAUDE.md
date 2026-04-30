@@ -3,7 +3,7 @@
 > **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 1 (galaxy map) complete + runtime strings migrated to English + Wave 1.5 polish (elliptical orbits with Kepler 2nd-law motion, extent-aware system packing with cluster bias, smooth chasing camera, 10000-unit disk). Gameplay layer not started — will be built on top of the simulation in the next session.
+> **Status:** Wave 2 (empire foundation) complete — 7-resource economy, ~150-node skill-tree modal, top resource HUD, deterministic starting planet, localStorage save. Galaxy/system/planet view from earlier waves still works. Surface visuals (drones, factories, space elevators) and multiplayer not yet wired.
 
 ---
 
@@ -11,21 +11,37 @@
 
 **Incremental space empire — multiplayer.**
 
-The galaxy you see now is the playable map. The game loop, economy, and multiplayer relay haven't been wired yet. The next session will lock the gameplay design and add the game loop on top.
+The galaxy from Wave 1 is the playable map. Wave 2 layered the resource economy and upgrade tree on top. Future waves add planet-surface visuals, system expansion, and the PartyKit relay so other players' empires become visible.
 
 ---
 
 ## What's done
 
-A 3-layer galaxy simulation:
-
+### Wave 1 — galaxy simulation (carry-over)
+A 3-layer procedural galaxy:
 1. **Galaxy layer** — ~200 star systems on spiral arms around a supermassive black hole.
 2. **System layer** — fly into a system; planets orbit the star with rings, moons, orbit lines.
-3. **Planet layer** — focus on a planet; its moons orbit it, you can hop between sibling planets.
+3. **Planet layer** — focus on a planet; its moons orbit it, sibling planets remain visible.
 
-All bodies are procedural — no textures, no external assets. GLSL fragment shaders for planets, stars, moons, accretion disk, nebula skydome.
+All bodies are procedural — no textures, no external assets. GLSL fragment shaders for planets, stars, moons, accretion disk, nebula skydome. Full reference in **`docs/GALAXY.md`**.
 
-Full parameter reference and architecture in **`docs/GALAXY.md`**.
+### Wave 2 — empire foundation (this session)
+
+Gameplay layer that sits on top of the galaxy view:
+
+- **Seven resources, 1:1 with planet types**: Metal (rocky), Water (ocean), Gas (gas), Crystal (ice), Plasma (lava), Silicon (desert), Chemical (toxic). Same global pool for every player; you only earn a resource if you own a planet of that type, so player must spread to access all of them.
+- **Top resource HUD**: single straight row of compact chips (`[●] METAL 153 +0.8/s`), seven total + an `Upgrades` launcher button. Locked resources show `—`. Lives top-center, below the layer switcher.
+- **Skill-tree modal** (`▦ Upgrades` button → full-screen overlay):
+  - ~150 nodes laid out on a 140 px grid, edges drawn as straight or L-shaped SVG paths (no curves, no diagonals).
+  - **CORE** node at origin, always owned.
+  - **Up column**: Expansion (Moon → Elevator → Shipyard → System Expansion → Wormhole Observatory → Transit → Trade Hub).
+  - **East half**: 7 mining lanes + 7 optimisation rows, alternating above and below row 0 so resource lanes are interleaved instead of stacked as one block.
+  - **West half**: 10 chains of logistics, drones, and tech mixed across rows. Tech chains have **cross-category prereqs** (Industrial Doctrine ← Storage Bays II, Storage Doctrine ← Refinery II, Swarm Doctrine ← Drone Fleet III, Quantum Compute ← Drone Engines II) so the tree feels woven, not striped.
+  - Modal is pannable with mouse drag (capture only acquires after >4 px movement so node clicks aren't swallowed). Esc / backdrop click / × closes.
+- **Tick** runs every render frame, dt-driven. Trickle of `0.8/s` per owned producing planet so the very first upgrade is reachable in ~10 s.
+- **Deterministic starting planet**: scans the galaxy for habitable + moon-bearing worlds and picks the best (ocean+temperate > rocky+temperate > rocky+any). Persisted across reloads.
+- **Save/load**: `localStorage` under `vibecoder.empire.v3`. Empire auto-saves every 5 s of wall clock and on every purchase. No offline progress.
+- **Detail panel** lives on the right (top: 132 px so it doesn't collide with the HUD). The old bottom-left "planets in system" list was removed — clicking labels and the system view itself already does that job.
 
 ---
 
@@ -33,7 +49,7 @@ Full parameter reference and architecture in **`docs/GALAXY.md`**.
 
 1. Read this file end-to-end and `docs/GALAXY.md`.
 2. `git log --oneline -10` to see recent history.
-3. Lock the gameplay design with the user (incremental empire — economy, build queues, multiplayer relay) before coding any logic.
+3. Decide which Wave to tackle next — see "Open work" below.
 
 ---
 
@@ -46,7 +62,7 @@ Full parameter reference and architecture in **`docs/GALAXY.md`**.
 - **Public repo, commits land on `main`.**
 - **Instant-load** — no loading screens, no asset downloads. Audio (when added) must be WebAudio synthesized.
 - **90% AI** — gameplay logic written by Claude under user direction.
-- **Language** — all docs, code comments, commit messages, and runtime UI strings are English. Turkish strings present today are interim.
+- **Language** — all docs, code comments, commit messages, and runtime UI strings are English. Any Turkish strings still present are interim.
 
 ---
 
@@ -54,33 +70,39 @@ Full parameter reference and architecture in **`docs/GALAXY.md`**.
 
 ```
 gamejam/
-├── CLAUDE.md            this file
+├── CLAUDE.md
 ├── docs/
-│   └── GALAXY.md        full parameter reference + architecture
-├── index.html           minimal scaffold + mandatory Vibe Jam widget
+│   └── GALAXY.md
+├── index.html
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts
 ├── public/favicon.svg
 ├── src/
-│   ├── main.ts          bootstrap
-│   ├── style.css        UI styling
-│   └── galaxy/
-│       ├── app.ts                  orchestrator + render loop
-│       ├── camera-controller.ts    smooth layer transitions, drag/wheel
-│       ├── types.ts
-│       ├── rng.ts                  seeded mulberry32
-│       ├── generation.ts           procgen: galaxy/system/planet/moon + lore
-│       ├── shaders.ts              all GLSL: planet/star/moon/disk/nebula
-│       ├── starfield.ts            background nebula skydome + 3 star layers
-│       ├── blackhole.ts
-│       ├── star.ts
-│       ├── planet.ts               planets + rings + moons + orbits
-│       ├── system.ts               star + planets + orbit lines
-│       ├── galaxy.ts               full assembly + LOD switching
-│       ├── labels.ts               HTML overlay labels with N-nearest LOD
-│       ├── picking.ts              raycaster-based clicks
-│       └── ui.ts                   breadcrumb, layer switcher, panel, list
+│   ├── main.ts
+│   ├── style.css                   global UI + empire styles
+│   ├── galaxy/                     Wave-1 simulation
+│   │   ├── app.ts                  orchestrator + render loop (also hosts Empire tick)
+│   │   ├── camera-controller.ts
+│   │   ├── types.ts
+│   │   ├── rng.ts
+│   │   ├── generation.ts
+│   │   ├── shaders.ts
+│   │   ├── starfield.ts
+│   │   ├── blackhole.ts
+│   │   ├── star.ts
+│   │   ├── planet.ts
+│   │   ├── system.ts
+│   │   ├── galaxy.ts
+│   │   ├── labels.ts
+│   │   ├── picking.ts
+│   │   └── ui.ts                   breadcrumb, layer switcher, detail panel
+│   └── empire/                     Wave-2 gameplay layer
+│       ├── types.ts                ResourceKey, EmpireState, UpgradeNode
+│       ├── upgrades.ts             ~150-node skill tree catalogue with grid positions
+│       ├── empire.ts               state, tick, save/load, starting planet selection
+│       ├── hud.ts                  top resource bar + Upgrades launcher button
+│       └── panel.ts                pannable skill-tree modal (SVG edges + DOM nodes)
 └── node_modules/
 ```
 
@@ -99,9 +121,24 @@ gamejam/
 
 ---
 
+## Open work — wave roadmap
+
+| Wave | Goal |
+|---|---|
+| **W3** | Planet-surface visuals: procedural factory meshes anchored to the planet (rotate with axial spin), drones zipping between them. System view shows them as emissive glow + connection lines. |
+| **W4** | Phase 2 — Moon outpost + Space Elevator. Drone shuttles travel along the elevator; visible from system view. |
+| **W5** | Phase 3 — System Expansion: colonise other planets in the home system, per-planet-type production, inter-planet drone trails. |
+| **W6** | PartyKit relay — replicate each player's public empire state (claimed system, owned planets, owned upgrades). Other players' systems show their progress visually. |
+| **W7** | Phase 4 — Wormholes + Trading. Observatory unlocks wormhole rifts, transit lets you visit other systems, trade hub allows resource swaps with other players. |
+
+Tunables that may need rebalancing as gameplay matures: starter trickle (`TRICKLE_PER_OWNED_PLANET = 0.8`), base storage cap (`BASE_STORAGE_CAP = 200`), per-tier rate values in `src/empire/upgrades.ts`.
+
+---
+
 ## Workflow notes
 
 - User is non-technical — explain WHAT and WHY, not code internals.
 - Plan before implementing; wait for user confirmation before each phase.
 - Commit only when user explicitly approves.
 - Update this file after each completed phase so future sessions can resume.
+- Storage keys to know: `vibecoder.empire.v3` (full empire state), `vibecoder.empire.panelWidth.v2` (legacy panel width — unused after W2 redesign, can be deleted).
