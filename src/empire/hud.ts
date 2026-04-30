@@ -139,10 +139,6 @@ export class ResourceHUD {
     this.buttonCount.textContent = `${owned}/${total}`;
     this.button.classList.toggle('em-hud-btn-ready', ready > 0);
     this.button.dataset.ready = String(ready);
-
-    // Hide the whole HUD until the player has claimed a homeworld — there is
-    // no income or upgrade access in that initial state.
-    this.root.style.display = this.empire.state.homeClaimed ? '' : 'none';
   }
 
   refresh(): void {

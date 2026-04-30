@@ -50,13 +50,18 @@ interface HomeCtx {
   fullSystemClaimed: boolean;
 }
 
-// Slim hook surface UI uses to render the W4-D/E claim flows without taking
+// Slim hook surface UI uses to render the W4-E / W5 claim flows without taking
 // a hard dependency on Empire (keeps galaxy/* free of empire types).
 export interface EmpireCtx {
-  homeClaimed: boolean;
   needsMoonChoice: boolean;
-  isHomeworldEligible: (planetId: string) => boolean;
-  claimHomeworld: (planetId: string) => void;
+  // W5 — system-expansion bought + at least one home-system planet still
+  // unowned. Drives the "Expand your empire" banner.
+  hasClaimablePlanets: boolean;
+  // Per-planet annex hooks. Cost is rendered as already-formatted HTML pills
+  // so the UI module stays free of resource/colour tables.
+  canClaimPlanet: (planetId: string) => boolean;
+  claimPlanetCostHtml: (planetId: string) => string;
+  claimPlanet: (planetId: string) => void;
 }
 
 export class UI {
@@ -70,10 +75,11 @@ export class UI {
   private navigate: NavigateFn;
   private home: HomeCtx = { systemId: null, planetId: null, fullSystemClaimed: false };
   private empireCtx: EmpireCtx = {
-    homeClaimed: true,
     needsMoonChoice: false,
-    isHomeworldEligible: () => false,
-    claimHomeworld: () => {},
+    hasClaimablePlanets: false,
+    canClaimPlanet: () => false,
+    claimPlanetCostHtml: () => '',
+    claimPlanet: () => {},
   };
   private layer: LayerState = { kind: 'galaxy', systemId: null, planetId: null };
 
@@ -100,20 +106,21 @@ export class UI {
     this.panel = el('div', 'gx-panel');
     root.appendChild(this.panel);
 
-    // W4-D/E sticky banner: announces what the player needs to do to advance
-    // ("Choose a homeworld" before claim, "Click a moon" after Moon Outpost).
+    // W4-E / W5 sticky banner: announces what the player needs to do to
+    // advance ("Click a moon" after Moon Outpost, "Annex planets" after
+    // System Expansion).
     this.banner = el('div', 'gx-banner');
     this.banner.style.display = 'none';
     root.appendChild(this.banner);
 
-    // Delegated click for the claim-homeworld button rendered inside the
-    // planet panel — kept in one place so the renderer can churn the panel
-    // freely without leaking handlers.
+    // Delegated click for the W5 annex button rendered inside the planet
+    // panel — kept in one place so the renderer can churn the panel freely
+    // without leaking handlers.
     this.panel.addEventListener('click', (e) => {
-      const btn = (e.target as HTMLElement).closest('[data-claim-planet]') as HTMLElement | null;
+      const btn = (e.target as HTMLElement).closest('[data-annex-planet]') as HTMLElement | null;
       if (!btn) return;
-      const planetId = btn.dataset.claimPlanet ?? '';
-      if (planetId) this.empireCtx.claimHomeworld(planetId);
+      const planetId = btn.dataset.annexPlanet ?? '';
+      if (planetId) this.empireCtx.claimPlanet(planetId);
     });
 
     this.hint = el('div', 'gx-hint');
@@ -144,16 +151,19 @@ export class UI {
   }
 
   private renderBanner(): void {
+    // Banner priority: moon-pick (W4-E) over annex (W5). Moon-pick is always
+    // a one-shot follow-up to a specific purchase, while system expansion
+    // lingers across many planets and shouldn't drown out the moon prompt.
     let html = '';
-    if (!this.empireCtx.homeClaimed) {
-      html = `
-        <span class="gx-banner-ico">★</span>
-        <span><strong>Choose your homeworld</strong> — open a system and click a rocky planet (with moons) to claim it.</span>
-      `;
-    } else if (this.empireCtx.needsMoonChoice) {
+    if (this.empireCtx.needsMoonChoice) {
       html = `
         <span class="gx-banner-ico">◐</span>
         <span><strong>Pick an outpost moon</strong> — open your home planet view and click one of its moons.</span>
+      `;
+    } else if (this.empireCtx.hasClaimablePlanets) {
+      html = `
+        <span class="gx-banner-ico">✦</span>
+        <span><strong>Expand your empire</strong> — click eligible planets in your home system to annex them.</span>
       `;
     }
     if (html) {
@@ -333,11 +343,14 @@ export class UI {
     const riskCls = RISK_CLASS[p.risk];
 
     let claimRow = '';
-    if (!this.empireCtx.homeClaimed) {
-      const eligible = this.empireCtx.isHomeworldEligible(p.id);
-      claimRow = eligible
-        ? `<button class="gx-claim-btn" data-claim-planet="${escapeHtml(p.id)}">★ Claim as Homeworld</button>`
-        : `<div class="gx-claim-hint">Homeworld must be a <strong>rocky</strong> planet with at least one moon.</div>`;
+    if (this.empireCtx.canClaimPlanet(p.id)) {
+      const costHtml = this.empireCtx.claimPlanetCostHtml(p.id);
+      claimRow = `
+        <button class="gx-annex-btn" data-annex-planet="${escapeHtml(p.id)}">
+          <span class="gx-annex-label">✦ Annex Planet</span>
+          <span class="gx-annex-cost">${costHtml}</span>
+        </button>
+      `;
     }
 
     return `

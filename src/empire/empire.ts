@@ -14,6 +14,13 @@ import {
 import type { EmpireState, PlanetIncome, ResourceBag, ResourceKey, UnlockFlag, UpgradeNode } from './types';
 import { CORE_NODE_ID, NODES_BY_ID, UPGRADE_NODES, canAfford, subtractCost } from './upgrades';
 
+// W5 — claim cost for annexing a planet in the home system. Scales with how
+// many home-system planets the empire has already claimed (excluding the
+// homeworld itself), giving the curve the player feels: thousands → tens of
+// thousands as the home system fills up.
+const SYSTEM_PLANET_CLAIM_BASE: Partial<ResourceBag> = { metal: 5000, water: 3000, crystal: 2000 };
+const SYSTEM_PLANET_CLAIM_GROWTH = 1.6;
+
 export interface EmpireMetrics {
   rates: ResourceBag;
   caps: ResourceBag;
@@ -51,13 +58,33 @@ export class Empire {
       if (this.state.homeClaimed === undefined) {
         this.state.homeClaimed = !!this.state.homePlanetId;
       }
+      // W5: dormant saves (W4-D era, homeClaimed=false) get bootstrapped to
+      // an auto-picked homeworld so every existing player drops straight into
+      // the new instant-start flow on first reload.
+      if (!this.state.homeClaimed) {
+        this.bootstrapHomeworld();
+      }
     } else {
       this.state = createEmptyEmpire(seed);
+      this.bootstrapHomeworld();
       this.save();
     }
     if (!this.state.unlockedNodes.includes(CORE_NODE_ID)) {
       this.state.unlockedNodes.unshift(CORE_NODE_ID);
     }
+  }
+
+  // Pick a deterministic eligible homeworld (rocky + at least one moon) from
+  // the galaxy and write the home/owned/system fields. Multiplayer (W6) will
+  // replace this with a per-player coordinated claim — see project memory.
+  private bootstrapHomeworld(): void {
+    const pick = pickStartingPlanet(this.galaxy);
+    if (!pick) return; // ~impossible with ~200 systems, but keep dormant if it happens
+    this.state.homeClaimed = true;
+    this.state.homeSystemId = pick.system.id;
+    this.state.homePlanetId = pick.planet.id;
+    this.state.ownedPlanets = [pick.planet.id];
+    this.state.claimedSystems = { [pick.system.id]: 1 };
   }
 
   // --- Read-only getters ----------------------------------------------------
@@ -72,8 +99,70 @@ export class Empire {
     return sys?.planets.find((p) => p.id === this.state.homePlanetId) ?? null;
   }
   // True for any rocky planet that has at least one moon — eligible homeworld.
+  // Used by the auto-pick at empire creation and by W6 (multiplayer) to decide
+  // which planets are valid claim candidates.
   isHomeworldEligible(planet: PlanetData): boolean {
     return planet.type === 'rocky' && planet.moons.length > 0;
+  }
+
+  // --- W5: System Expansion -----------------------------------------------
+  //
+  // Once `system-expansion` is unlocked, the player can annex other planets in
+  // their home system. Each claim deducts a scaling cost and adds the planet
+  // to ownedPlanets so its primary+secondary income starts flowing.
+
+  // Eligibility: unlock owned + planet is in the home system + not yet owned.
+  canClaimSystemPlanet(planet: PlanetData): boolean {
+    if (!this.hasUnlock('system-expansion')) return false;
+    if (!this.state.homeClaimed) return false;
+    if (this.state.ownedPlanets.includes(planet.id)) return false;
+    const sys = findSystemOf(this.galaxy, planet.id);
+    return !!sys && sys.id === this.state.homeSystemId;
+  }
+
+  // Cost grows with how many *non-home* home-system planets are already owned,
+  // so the curve is "thousands → tens of thousands" as the system fills up.
+  systemPlanetClaimCost(_planet: PlanetData): Partial<ResourceBag> {
+    const home = this.state.homePlanetId;
+    const sys = this.homeSystem();
+    if (!sys) return {};
+    let claimed = 0;
+    for (const p of sys.planets) {
+      if (p.id === home) continue;
+      if (this.state.ownedPlanets.includes(p.id)) claimed++;
+    }
+    const mul = Math.pow(SYSTEM_PLANET_CLAIM_GROWTH, claimed);
+    const out: Partial<ResourceBag> = {};
+    for (const k of RESOURCE_KEYS) {
+      const base = SYSTEM_PLANET_CLAIM_BASE[k];
+      if (base === undefined) continue;
+      out[k] = Math.round(base * mul);
+    }
+    return out;
+  }
+
+  claimSystemPlanet(planetId: string): boolean {
+    const sys = this.homeSystem();
+    if (!sys) return false;
+    const planet = sys.planets.find((p) => p.id === planetId);
+    if (!planet) return false;
+    if (!this.canClaimSystemPlanet(planet)) return false;
+    const cost = this.systemPlanetClaimCost(planet);
+    if (!canAfford(this.state.resources, cost)) return false;
+    subtractCost(this.state.resources, cost);
+    this.state.ownedPlanets.push(planet.id);
+    this.save();
+    this.emit();
+    return true;
+  }
+
+  // Returns every still-claimable home-system planet. Drives the label markers
+  // that highlight where the player should click.
+  claimableHomeSystemPlanets(): PlanetData[] {
+    if (!this.hasUnlock('system-expansion')) return [];
+    const sys = this.homeSystem();
+    if (!sys) return [];
+    return sys.planets.filter((p) => this.canClaimSystemPlanet(p));
   }
   // Resolve the chosen outpost moon back to a planet/system pair so income can
   // be tier-scaled and the renderer knows where to attach the dome.
@@ -287,33 +376,10 @@ export class Empire {
 
   reset(): void {
     this.state = createEmptyEmpire(this.seed);
+    this.bootstrapHomeworld();
     this.state.unlockedNodes.unshift(CORE_NODE_ID);
     this.save();
     this.emit();
-  }
-
-  // W4-D — first-time homeworld claim. Validates eligibility, populates the
-  // empire's home/owned/system fields, and emits so UI can react.
-  claimHomeworld(planetId: string): boolean {
-    if (this.state.homeClaimed) return false;
-    let foundSys: SystemData | null = null;
-    let foundPlanet: PlanetData | null = null;
-    for (const s of this.galaxy.systems) {
-      for (const p of s.planets) {
-        if (p.id === planetId) { foundSys = s; foundPlanet = p; break; }
-      }
-      if (foundPlanet) break;
-    }
-    if (!foundPlanet || !foundSys) return false;
-    if (!this.isHomeworldEligible(foundPlanet)) return false;
-    this.state.homeClaimed = true;
-    this.state.homeSystemId = foundSys.id;
-    this.state.homePlanetId = foundPlanet.id;
-    this.state.ownedPlanets = [foundPlanet.id];
-    this.state.claimedSystems = { [foundSys.id]: 1 };
-    this.save();
-    this.emit();
-    return true;
   }
 
   // W4-E — set the chosen outpost moon. Only valid when `moon-outpost` is
@@ -377,9 +443,9 @@ function loadFromStorage(seed: number): EmpireState | null {
   } catch { return null; }
 }
 
-// W4-D: a brand-new save starts with no homeworld claimed. The player picks
-// their own first world from galaxy view; until then the empire is dormant
-// (homeClaimed=false → no income, no upgrade panel access, no markers).
+// W5: the empire layer no longer starts dormant — `bootstrapHomeworld` runs
+// right after this and writes the auto-picked home/owned fields. Multiplayer
+// (W6) will replace the auto-pick with a per-player coordinated claim.
 function createEmptyEmpire(seed: number): EmpireState {
   return {
     seed,
@@ -394,6 +460,27 @@ function createEmptyEmpire(seed: number): EmpireState {
     outpostMoonId: null,
     lastSavedAt: Date.now(),
   };
+}
+
+// Pick a deterministic starting planet from the galaxy. Prefers temperate
+// rocky+moon worlds, falls back to any rocky+moon planet (the catalogue's
+// "metal+water baseline" assumption needs both).
+function pickStartingPlanet(galaxy: GalaxyData): { system: SystemData; planet: PlanetData } | null {
+  let temperateMatch: { system: SystemData; planet: PlanetData } | null = null;
+  let anyMatch: { system: SystemData; planet: PlanetData } | null = null;
+  for (const s of galaxy.systems) {
+    for (const p of s.planets) {
+      if (p.type !== 'rocky') continue;
+      if (p.moons.length === 0) continue;
+      if (!anyMatch) anyMatch = { system: s, planet: p };
+      if (!temperateMatch && p.temperatureC >= -30 && p.temperatureC <= 50) {
+        temperateMatch = { system: s, planet: p };
+      }
+      if (temperateMatch) break;
+    }
+    if (temperateMatch) break;
+  }
+  return temperateMatch ?? anyMatch;
 }
 
 function findPlanet(galaxy: GalaxyData, planetId: string): PlanetData | null {

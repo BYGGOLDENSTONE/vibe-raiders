@@ -147,9 +147,10 @@ export interface UpgradeNode {
 
 export interface EmpireState {
   seed: number;
-  // homeClaimed === false on a brand-new save: the player hasn't picked their
-  // homeworld yet, so the empire layer is dormant (no income, no upgrades, no
-  // markers). homeSystemId/homePlanetId are empty strings in that case.
+  // W5: every fresh save auto-bootstraps a homeworld via pickStartingPlanet
+  // (single-player flow; W6 multiplayer will swap this for a coordinated
+  // claim). homeClaimed=false is now only a fallback if the picker can't find
+  // an eligible planet — in that pathological case the empire stays dormant.
   homeClaimed: boolean;
   homeSystemId: string;
   homePlanetId: string;

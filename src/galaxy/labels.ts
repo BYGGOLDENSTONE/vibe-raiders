@@ -22,9 +22,9 @@ export interface HomeMarkerOpts {
   homeSystemId: string;
   ownedPlanets: Set<string>;
   homeSystemFullyClaimed: boolean;
-  // W4-D: when the player hasn't picked a homeworld yet, eligible candidates
-  // get a "claim ✦" prefix so they stand out across galaxy/system views.
-  eligibleHomeworlds: Set<string>;
+  // W5: planets in the home system that are still claimable via System
+  // Expansion. Get an "+ ANNEX" prefix so the player sees where to click.
+  claimablePlanets: Set<string>;
   // W4-E: planetId whose moons are awaiting outpost selection (single planet
   // — the player's home — for now). Empty string disables the marker.
   awaitingMoonChoiceForPlanet: string;
@@ -143,7 +143,7 @@ export class LabelManager {
         | 'home-system-full'
         | 'home-system-partial'
         | 'owned-planet'
-        | 'eligible-homeworld'
+        | 'claimable-planet'
         | 'outpost-moon-active'
         | 'outpost-moon-pending'
         | null;
@@ -153,8 +153,8 @@ export class LabelManager {
         kind = 'home-planet';
       } else if (l.kind === 'planet' && l.planetId && opts.ownedPlanets.has(l.planetId)) {
         kind = 'owned-planet';
-      } else if (l.kind === 'planet' && l.planetId && opts.eligibleHomeworlds.has(l.planetId)) {
-        kind = 'eligible-homeworld';
+      } else if (l.kind === 'planet' && l.planetId && opts.claimablePlanets.has(l.planetId)) {
+        kind = 'claimable-planet';
       } else if (l.kind === 'system' && l.systemId === opts.homeSystemId && opts.homeSystemId) {
         kind = opts.homeSystemFullyClaimed ? 'home-system-full' : 'home-system-partial';
       } else if (
@@ -173,7 +173,7 @@ export class LabelManager {
         case 'home-system-full':    prefix = '★★ HOME SYSTEM · '; break;
         case 'home-system-partial': prefix = '★ HOME · '; break;
         case 'owned-planet':        prefix = '✓ '; break;
-        case 'eligible-homeworld':  prefix = '✦ CLAIM · '; break;
+        case 'claimable-planet':    prefix = '✦ ANNEX · '; break;
         case 'outpost-moon-pending':prefix = '◌ pick · '; break;
         case 'outpost-moon-active': prefix = '◐ outpost · '; break;
       }

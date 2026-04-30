@@ -247,8 +247,12 @@ html, body {
   text-shadow: 0 0 12px rgba(255, 212, 122, 0.6);
 }
 
-.gx-claim-btn {
-  display: block;
+/* W5 — annex button on the planet panel for system-expansion claims */
+.gx-annex-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   width: 100%;
   margin-top: 14px;
   padding: 11px 14px;
@@ -263,25 +267,52 @@ html, body {
   cursor: pointer;
   transition: background 140ms, border-color 140ms, transform 100ms;
 }
-.gx-claim-btn:hover {
+.gx-annex-btn:hover {
   background: linear-gradient(180deg, rgba(255, 212, 122, 0.32), rgba(255, 212, 122, 0.14));
   border-color: rgba(255, 212, 122, 0.85);
   color: #fff;
 }
-.gx-claim-btn:active { transform: translateY(1px); }
-.gx-claim-hint {
-  margin-top: 12px;
-  padding: 10px 12px;
-  font-size: 11.5px;
-  color: var(--gx-fg-dim);
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px dashed rgba(160, 190, 230, 0.18);
-  border-radius: 6px;
+.gx-annex-btn:active { transform: translateY(1px); }
+.gx-annex-label { text-align: left; }
+.gx-annex-cost {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
-.gx-claim-hint strong { color: var(--gx-fg); }
+.gx-cost-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--gx-fg-dim);
+}
+.gx-cost-pill.ok {
+  border-color: color-mix(in srgb, var(--c, #9be8ff) 60%, transparent);
+  color: color-mix(in srgb, var(--c, #9be8ff) 80%, #fff);
+}
+.gx-cost-pill.short {
+  border-color: rgba(255, 100, 100, 0.45);
+  color: #ffb0b0;
+}
+.gx-cost-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c, #9be8ff);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--c, #9be8ff) 70%, transparent);
+}
+.gx-cost-amt { font-variant-numeric: tabular-nums; }
 
-/* Eligible-homeworld marker — pulse so the player notices it */
-.gx-label[data-home="eligible-homeworld"] {
+/* Claimable-planet marker — same yellow pulse as the old eligible-homeworld
+   marker, since the player gesture is the same: "click me to claim." */
+.gx-label[data-home="claimable-planet"] {
   border-color: rgba(255, 212, 122, 0.65);
   background: rgba(40, 30, 12, 0.6);
   color: #ffe9b2;

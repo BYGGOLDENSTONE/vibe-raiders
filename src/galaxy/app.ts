@@ -10,6 +10,7 @@ import { Empire } from '../empire/empire';
 import { ResourceHUD } from '../empire/hud';
 import { UpgradePanel } from '../empire/panel';
 import { DebugPanel } from '../empire/debug';
+import { RESOURCE_COLOR, RESOURCE_KEYS, RESOURCE_LABEL, type ResourceBag, type ResourceKey } from '../empire/types';
 import { makeSurface, updateSurface, disposeSurface, surfaceConfig, type SurfaceHandle } from '../empire/surface';
 import {
   makeMoonOutpost,
@@ -93,15 +94,30 @@ export class App {
     // Empire (gameplay state) — selects/loads home planet, starts the tick.
     this.empire = new Empire(data, GALAXY_SEED);
 
-    // Camera + controller
+    // Camera + controller — start framed on the player's homeworld so first-
+    // time players land in their empire instead of staring at the galaxy from
+    // 18 000 units out. Falls back to galaxy view only if bootstrap somehow
+    // failed to claim a home planet.
     this.controller = new CameraController(this.camera, this.canvas);
-    this.controller.setLimits(2400, 24000);
+    const start: LayerState = this.empire.state.homeClaimed
+      ? { kind: 'planet', systemId: this.empire.state.homeSystemId, planetId: this.empire.state.homePlanetId }
+      : { kind: 'galaxy', systemId: null, planetId: null };
+    if (start.kind !== 'galaxy') {
+      setActiveSystem(this.galaxy, start.systemId);
+    }
+    // resolveTarget reads world positions, so push the freshly-built matrices.
+    this.galaxy.root.updateMatrixWorld(true);
+    const startPreset = this.layerPreset(start);
+    const startTarget = this.resolveTarget(start);
+    this.controller.trackedNode = startTarget.node;
+    this.controller.setLimits(startPreset.minDist, startPreset.maxDist);
     this.controller.snap({
-      target: new THREE.Vector3(0, 0, 0),
-      distance: 18000,
+      target: startTarget.pos,
+      distance: startPreset.distance,
       yaw: 0.6,
-      pitch: 0.95,
+      pitch: startPreset.pitch,
     });
+    this.state = start;
 
     // Labels
     this.labels = new LabelManager(this.labelLayer, this.camera);
@@ -112,26 +128,7 @@ export class App {
 
     // UI
     this.ui = new UI(this.overlay, this.galaxy, (next) => this.navigateTo(next));
-    this.ui.setEmpireContext({
-      homeClaimed: this.empire.state.homeClaimed,
-      needsMoonChoice: this.empire.needsOutpostMoonChoice(),
-      isHomeworldEligible: (planetId: string) => {
-        for (const s of this.galaxy.data.systems) {
-          for (const p of s.planets) {
-            if (p.id === planetId) return this.empire.isHomeworldEligible(p);
-          }
-        }
-        return false;
-      },
-      claimHomeworld: (planetId: string) => {
-        if (this.empire.claimHomeworld(planetId)) {
-          // Smooth-fly to the freshly claimed homeworld so the player sees
-          // their pick come alive (factories drop, surface populates).
-          const sysId = this.empire.state.homeSystemId;
-          this.navigateTo({ kind: 'planet', systemId: sysId, planetId });
-        }
-      },
-    });
+    this.ui.setEmpireContext(this.buildEmpireCtx());
     this.refreshHomeMarkers();
     this.ui.render(this.state);
 
@@ -334,27 +331,18 @@ export class App {
   }
 
   // Push current home/owned state to the label manager and breadcrumb UI so
-  // the HOME / HOME SYSTEM / claim-flow badges stay in sync with the empire.
+  // the HOME / HOME SYSTEM / annex badges stay in sync with the empire.
   private refreshHomeMarkers(): void {
     const st = this.empire.state;
     const homeSystemId = st.homeClaimed ? st.homeSystemId : '';
     const homePlanetId = st.homeClaimed ? st.homePlanetId : '';
     const fullClaimed = st.homeClaimed && this.empire.isHomeSystemFullyClaimed();
 
-    // Eligible homeworlds — only computed before the player claims one, to
-    // avoid lighting up rocky planets across the galaxy after claim.
-    const eligibleHomeworlds = new Set<string>();
-    if (!st.homeClaimed) {
-      for (const s of this.galaxy.data.systems) {
-        for (const p of s.planets) {
-          if (this.empire.isHomeworldEligible(p)) eligibleHomeworlds.add(p.id);
-        }
-      }
-    }
+    // W5 — claimable planets light up once `system-expansion` is unlocked,
+    // until every home-system planet is owned.
+    const claimable = this.empire.claimableHomeSystemPlanets();
+    const claimablePlanets = new Set(claimable.map((p) => p.id));
 
-    // Awaiting moon choice — pre-claim this is empty; post-Moon-Outpost-pre-
-    // moon-pick, every moon of the home planet glows so the player sees where
-    // to click.
     const awaitingMoon = this.empire.needsOutpostMoonChoice() ? homePlanetId : '';
 
     this.labels.markHome({
@@ -362,7 +350,7 @@ export class App {
       homeSystemId,
       ownedPlanets: new Set(st.ownedPlanets),
       homeSystemFullyClaimed: fullClaimed,
-      eligibleHomeworlds,
+      claimablePlanets,
       awaitingMoonChoiceForPlanet: awaitingMoon,
       outpostMoonId: st.outpostMoonId,
     });
@@ -371,24 +359,43 @@ export class App {
       planetId: homePlanetId || null,
       fullSystemClaimed: fullClaimed,
     });
-    this.ui.setEmpireContext({
-      homeClaimed: st.homeClaimed,
-      needsMoonChoice: this.empire.needsOutpostMoonChoice(),
-      isHomeworldEligible: (planetId: string) => {
-        for (const s of this.galaxy.data.systems) {
-          for (const p of s.planets) {
-            if (p.id === planetId) return this.empire.isHomeworldEligible(p);
-          }
+    this.ui.setEmpireContext(this.buildEmpireCtx());
+  }
+
+  // EmpireCtx wires UI hooks (banner, panel buttons) to the empire layer
+  // without leaking empire types into galaxy/*. Rebuilt on every emit so the
+  // ctx always sees fresh state (canClaimPlanet returns false once owned, etc).
+  private buildEmpireCtx() {
+    const findPlanet = (planetId: string) => {
+      for (const s of this.galaxy.data.systems) {
+        for (const p of s.planets) {
+          if (p.id === planetId) return p;
         }
-        return false;
+      }
+      return null;
+    };
+    const claimable = this.empire.claimableHomeSystemPlanets();
+    return {
+      needsMoonChoice: this.empire.needsOutpostMoonChoice(),
+      hasClaimablePlanets: claimable.length > 0,
+      canClaimPlanet: (planetId: string) => {
+        const p = findPlanet(planetId);
+        return !!p && this.empire.canClaimSystemPlanet(p);
       },
-      claimHomeworld: (planetId: string) => {
-        if (this.empire.claimHomeworld(planetId)) {
+      claimPlanetCostHtml: (planetId: string) => {
+        const p = findPlanet(planetId);
+        if (!p) return '';
+        return formatCostPills(this.empire.systemPlanetClaimCost(p), this.empire.state.resources);
+      },
+      claimPlanet: (planetId: string) => {
+        if (this.empire.claimSystemPlanet(planetId)) {
+          // Camera-drift to the freshly claimed planet so the player sees
+          // their new asset spin into the rotation.
           const sysId = this.empire.state.homeSystemId;
           this.navigateTo({ kind: 'planet', systemId: sysId, planetId });
         }
       },
-    });
+    };
   }
 
   // Build / rebuild the home-planet surface visuals. Cheap-skips when the
@@ -522,4 +529,33 @@ export class App {
 
     requestAnimationFrame(this.loop);
   };
+}
+
+// Render a cost bag as inline pills, colour-coded per resource. Each pill
+// shows "have/need" and goes red when the player can't afford that resource —
+// mirrors the upgrade-panel buy-button style so the annex flow feels familiar.
+function formatCostPills(cost: Partial<ResourceBag>, have: ResourceBag): string {
+  const parts: string[] = [];
+  for (const k of RESOURCE_KEYS) {
+    const need = cost[k];
+    if (need === undefined || need <= 0) continue;
+    parts.push(formatPill(k, need, have[k]));
+  }
+  return parts.join('');
+}
+
+function formatPill(k: ResourceKey, need: number, have: number): string {
+  const ok = have >= need;
+  const cls = ok ? 'gx-cost-pill ok' : 'gx-cost-pill short';
+  return `<span class="${cls}" style="--c:${RESOURCE_COLOR[k]}" title="${RESOURCE_LABEL[k]}">`
+    + `<span class="gx-cost-dot"></span>`
+    + `<span class="gx-cost-amt">${formatNumber(need)}</span>`
+    + `</span>`;
+}
+
+function formatNumber(n: number): string {
+  if (n < 1000) return Math.round(n).toString();
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}K`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  return `${(n / 1_000_000_000).toFixed(2)}B`;
 }

@@ -3,7 +3,7 @@
 > **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 4 fully complete (A through E). Economy rebalanced (single-planet peak ~350/s instead of ~5.7M/s), drone metric chip surfaces what those upgrades do, fresh saves require a homeworld claim from galaxy view, and the Moon Outpost flag prompts a moon-pick. Save key v6. Multiplayer (W6), System Expansion claim flow (W5), and Wormhole rift (W7) still pending.
+> **Status:** Wave 5 complete. Fresh saves auto-bootstrap a homeworld (the W4-D manual-claim flow was reverted at user request — single-player simplification, replaced with per-player claims when multiplayer ships in W6). System Expansion (W5) lets the player annex other home-system planets via a click-to-claim button on the planet panel; cost grows ×1.6 per claim, label markers pulse. Save key still v6 (dormant W4-D saves heal on load). Multiplayer (W6) and Wormhole rift (W7) pending.
 
 ---
 
@@ -100,6 +100,33 @@ The previous balance let a single planet hit ~5.7 M/s metal once drone upgrades 
 - `moon-outpost.ts` no longer picks a primary moon — `makeMoonOutpost` takes a `MoonHandle` directly. The host (`app.ts`) resolves it from `outpostMoonContext()` and rebuilds when the chosen moon changes.
 
 **Files touched:** `docs/balance.csv` (new), `src/empire/types.ts` (state fields, save key v6, BASE_STORAGE_CAP), `src/empire/upgrades.ts` (rebalanced tier values), `src/empire/empire.ts` (formula change, `claimHomeworld`, `claimOutpostMoon`, `outpostMoonContext`, empty-state init), `src/empire/moon-outpost.ts` (chosen-moon signature), `src/empire/hud.ts` (drone chip + claim-gated visibility), `src/empire/debug.ts` (reset copy), `src/galaxy/ui.ts` (`EmpireCtx`, banner, claim button), `src/galaxy/labels.ts` (eligibility / pending-moon markers), `src/galaxy/app.ts` (claim wiring + label moon clicks), `src/style.css` (banner, claim button, drone chip).
+
+### Wave 5 — auto-homeworld + system expansion (this session)
+
+The W4-D manual-claim flow was reverted at user request: every fresh save now auto-bootstraps a rocky+moon homeworld and starts producing immediately. Once the player buys `system-expansion`, they can annex the rest of their home system one planet at a time.
+
+**Auto-bootstrap homeworld:**
+
+- `Empire` constructor calls `bootstrapHomeworld()` for fresh saves AND heals dormant W4-D-era saves (`homeClaimed=false`) on load. Same for `Empire.reset()` — debug reset goes straight back to a populated empire.
+- `pickStartingPlanet()` (returned to `empire.ts`) iterates the galaxy in deterministic order and returns the first temperate (-30°C..50°C) rocky+moon planet, falling back to any rocky+moon planet. Multiplayer (W6) will replace this picker with a per-player coordinated claim — see project memory `multiplayer_plan`.
+- The "Choose your homeworld" banner, `★ Claim as Homeworld` button, and `eligibleHomeworlds` label markers were all removed. `claimHomeworld()` deleted from Empire (W4-D code).
+- HUD `homeClaimed` visibility gate dropped — the bar always shows.
+- **Startup camera** snaps to the home planet view (`{kind:'planet'}`) instead of the galaxy overview. Without this, first-time players landed at distance 18 000 in galaxy view and didn't realise they already had a planet. The galaxy/system layers are still one click away via the layer switcher.
+
+**System Expansion (W5):**
+
+- `Empire.canClaimSystemPlanet(planet)` — true when `system-expansion` is unlocked AND the planet is in the home system AND not already owned.
+- `Empire.systemPlanetClaimCost(planet)` — `5000 metal + 3000 water + 2000 crystal × 1.6^n` where `n` is non-home home-system planets already owned. Curve: 1st claim ~5k/3k/2k, 6th ~52k/31k/21k. Resources are deducted on claim; the new planet's `PLANET_INCOME` (primary + secondary) starts flowing immediately, scaled by home-system tier (T1 = ×1).
+- `Empire.claimSystemPlanet(planetId)` validates eligibility + affordability, deducts cost, pushes to `ownedPlanets`, saves+emits.
+- `Empire.claimableHomeSystemPlanets()` — list of currently-claimable planets, drives label markers and banner state.
+- **Banner:** "Expand your empire — click eligible planets in your home system to annex them." Shown when there are claimable planets and no moon-pick is pending (moon-pick W4-E takes priority since it's a one-shot).
+- **Label markers:** `+ ANNEX · ` prefix on claimable planets with the same yellow pulse the old eligible-homeworld marker used.
+- **Planet panel:** `✦ Annex Planet` button with a row of cost pills (per-resource, green when affordable, red when short — same pattern as upgrade-panel buy buttons). Click → `claimSystemPlanet()` → camera flies to the freshly claimed planet so the player sees their new asset spin into the rotation.
+- The existing `★★ HOME SYSTEM` marker auto-engages once every planet in the home system is owned (no extra wiring needed — `isHomeSystemFullyClaimed()` already checks).
+
+**Files touched:** `src/empire/empire.ts` (bootstrap, `pickStartingPlanet`, claim methods, removed `claimHomeworld`), `src/empire/types.ts` (homeClaimed comment), `src/empire/hud.ts` (drop visibility gate), `src/galaxy/labels.ts` (`claimablePlanets` opt + `claimable-planet` kind), `src/galaxy/ui.ts` (new `EmpireCtx` shape, banner, annex button), `src/galaxy/app.ts` (EmpireCtx wiring, cost-pill formatter), `src/style.css` (annex button + cost pills + claimable-planet marker).
+
+**Save:** key still `vibecoder.empire.v6`. Old dormant saves auto-heal on load; saves that already had `homeClaimed=true` carry over untouched.
 
 ### Wave 4-B — moon outpost + space elevator visuals (previous session)
 
@@ -226,13 +253,13 @@ gamejam/
 | **W4-A** | ✅ Complete. Economy rewrite (planet income, synergy, system tier, rocky-only home, cost rebalance) + HOME button + label markers. |
 | **W4-B** | ✅ Complete. Dome + tether + shuttles on the chosen outpost moon. Visibility gated to the home-system view. |
 | **W4-C** | ✅ Complete. Balance pass — droneThroughput formula now additive (was multiplicative compound), tier values reduced ~4×, drone HUD chip added. Single-planet peak ~350/s instead of ~5.7M/s. Driven by `docs/balance.csv`. |
-| **W4-D** | ✅ Complete. Starting homeworld claim flow — fresh saves start dormant; player picks a rocky+moon planet from galaxy/system view via the panel button. Eligible planets pulse in labels. |
+| **W4-D** | ⤺ Reverted in W5 (single-player simplification — W6 will reintroduce per-player claim for multiplayer). |
 | **W4-E** | ✅ Complete. Moon outpost claim flow — Moon Outpost unlock now prompts the player to click a moon; only the chosen moon contributes income and renders the dome/tether. |
-| **W5** | System Expansion mechanic — `system-expansion` unlock currently just sets a flag; needs UI to claim other planets in the home system, then per-claim resource stream addition. Cumulative income jump (the planned "binler/onbinler" curve) lands here. |
-| **W6** | PartyKit relay — replicate each player's public empire state (claimed system, owned planets, owned upgrades). Other players' systems show their progress visually. |
+| **W5** | ✅ Complete. Auto-homeworld bootstrap on fresh save + System Expansion: `system-expansion` unlock enables per-planet annex with a `✦ Annex Planet` button + cost pills + label pulse. Cost ×1.6 per claim, income flows immediately. |
+| **W6** | PartyKit relay — replicate each player's public empire state (claimed system, owned planets, owned upgrades). Other players' systems show their progress visually. **Reintroduce per-player homeworld claim flow here** (W4-D's UI is gone but the concept of "pick where you spawn" comes back, scoped to unclaimed eligible planets in the shared galaxy). |
 | **W7** | Wormhole transit — claim a second system at T2 (×100 multiplier already wired in `claimedSystems`), visualised by a wormhole rift between systems. Trade Hub for inter-player resource swaps. |
 
-Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live constants: `PLANET_INCOME`, `SYNERGY_PER_PLANET = 0.2`, `SYSTEM_TIER_BASE = 100`, `MOON_OUTPOST_INCOME = 5/s crystal`, `BASE_STORAGE_CAP = 1500`, `PROD_MUL_PER_TIER`, milestone costs in `src/empire/upgrades.ts` `expSteps`. Wave 4-B visuals: `DOME_DIAMETER_FRAC`, `TETHER_RADIUS_FRAC`, `SHUTTLE_COUNT`, `SHUTTLE_BASE_SPEED` in `src/empire/moon-outpost.ts`.
+Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live constants: `PLANET_INCOME`, `SYNERGY_PER_PLANET = 0.2`, `SYSTEM_TIER_BASE = 100`, `MOON_OUTPOST_INCOME = 5/s crystal`, `BASE_STORAGE_CAP = 1500`, `PROD_MUL_PER_TIER`, milestone costs in `src/empire/upgrades.ts` `expSteps`. W5 annex: `SYSTEM_PLANET_CLAIM_BASE = {metal:5000, water:3000, crystal:2000}`, `SYSTEM_PLANET_CLAIM_GROWTH = 1.6` in `src/empire/empire.ts`. Wave 4-B visuals: `DOME_DIAMETER_FRAC`, `TETHER_RADIUS_FRAC`, `SHUTTLE_COUNT`, `SHUTTLE_BASE_SPEED` in `src/empire/moon-outpost.ts`.
 
 ---
 
