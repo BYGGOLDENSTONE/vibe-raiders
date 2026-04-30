@@ -7,6 +7,7 @@ import { LabelManager } from './labels';
 import { Picker } from './picking';
 import { UI } from './ui';
 import { Empire } from '../empire/empire';
+import type { TradeSwap } from '../empire/empire';
 import { ResourceHUD } from '../empire/hud';
 import { UpgradePanel } from '../empire/panel';
 import { RESOURCE_COLOR, RESOURCE_KEYS, RESOURCE_LABEL, type ResourceBag, type ResourceKey } from '../empire/types';
@@ -26,6 +27,13 @@ import {
   findOutpostMoon,
   type MoonOutpostHandle,
 } from '../empire/moon-outpost';
+import {
+  makeWormhole,
+  attachWormholeToSystem,
+  updateWormhole,
+  disposeWormhole,
+  type WormholeHandle,
+} from './wormhole';
 
 const GALAXY_SEED = 20260430;
 
@@ -56,6 +64,17 @@ export class App {
   private moonOutpostHasElevator = false;
   private moonOutpostPlanetId: string | null = null;
   private moonOutpostMoonId: string | null = null;
+  // W7 — vortex visuals at every connected system (self home + T2 + every
+  // remote player's home/T2 chain) plus thin galaxy-view lines between each
+  // connected pair. Rebuilt only when the connection set changes; per-frame
+  // work is just lookAt + uniform tick.
+  private wormholes = new Map<string, WormholeHandle>();
+  private connectionLines: THREE.LineSegments | null = null;
+  private wormholeKey = '';
+  // W7 — Trade Hub state. Cooldown lives on the client (60s), the relay also
+  // enforces 30s as a safety net. Toasts pile up briefly on rapid trades.
+  private tradeCooldownUntil = 0;
+  private tradeToastLayer: HTMLDivElement | null = null;
   private state: LayerState = { kind: 'galaxy', systemId: null, planetId: null };
   private clock = new THREE.Clock();
   private canvas: HTMLCanvasElement;
@@ -160,17 +179,29 @@ export class App {
     // owns the launcher button.
     this.upgradePanel = new UpgradePanel(this.overlay, this.empire);
     this.hud = new ResourceHUD(this.overlay, this.empire, this.upgradePanel);
+    // W7 — Trade Hub button click goes through App so it can route to the
+    // multiplayer relay (or NPC fallback in solo / when no counterpart is
+    // online). The HUD just owns the button.
+    this.hud.setTradeHandler(() => this.handleTradeClick());
+
+    // Toast layer for trade banners. Lives in the overlay so it stays above
+    // canvas but below modals.
+    this.tradeToastLayer = document.createElement('div');
+    this.tradeToastLayer.className = 'trade-toast-layer';
+    this.overlay.appendChild(this.tradeToastLayer);
     this.empire.subscribe(() => {
       this.upgradePanel.refresh();
       this.hud.refresh();
       this.rebuildSurfaceIfNeeded();
       this.rebuildMoonOutpostIfNeeded();
+      this.rebuildWormholesIfNeeded();
       this.refreshHomeMarkers();
       this.ui.render(this.state);
       this.publishMp();
     });
     this.rebuildSurfaceIfNeeded();
     this.rebuildMoonOutpostIfNeeded();
+    this.rebuildWormholesIfNeeded();
 
     // W6-D — multiplayer wiring. Solo mode skips this entirely so the relay
     // is only opened when the player actually wants to share a galaxy.
@@ -328,6 +359,11 @@ export class App {
     this.state = next;
     this.ui.render(this.state);
     this.updatePortalHint();
+    // W7 — connection lines only render in galaxy view; hide them in
+    // system / planet view so they don't streak through the local scene.
+    if (this.connectionLines) {
+      this.connectionLines.visible = next.kind === 'galaxy';
+    }
   }
 
   private updatePortalHint(): void {
@@ -414,18 +450,34 @@ export class App {
   // empire types into galaxy/*. Rebuilt on every emit so the ctx always sees
   // fresh state (next-target shifts, costs grow, etc).
   private buildEmpireCtx() {
-    const target = this.empire.nextAnnexTarget();
-    const cost = this.empire.nextAnnexCost();
     const haveBag = this.empire.state.resources;
+
+    // W6-E: home-system planet annex (always-on while system-expansion is up
+    // and the home system has unowned planets).
+    const annexTarget = this.empire.nextAnnexTarget();
+    const annexCost = this.empire.nextAnnexCost();
     let nextAnnex: { planetName: string; canAfford: boolean; costHtml: string } | null = null;
-    if (target && cost) {
-      const canAfford = canAffordCost(cost, haveBag);
+    if (annexTarget && annexCost) {
       nextAnnex = {
-        planetName: target.name,
-        canAfford,
-        costHtml: formatCostPills(cost, haveBag),
+        planetName: annexTarget.name,
+        canAfford: canAffordCost(annexCost, haveBag),
+        costHtml: formatCostPills(annexCost, haveBag),
       };
     }
+
+    // W7: wormhole system annex. Only surfaces once wormhole-transit is
+    // bought and no T2 system has been claimed yet.
+    const wormholeTarget = this.empire.nextWormholeTarget();
+    let nextWormhole: { systemName: string; canAfford: boolean; costHtml: string } | null = null;
+    if (wormholeTarget) {
+      const wormholeCost = this.empire.wormholeClaimCost();
+      nextWormhole = {
+        systemName: wormholeTarget.name,
+        canAfford: canAffordCost(wormholeCost, haveBag),
+        costHtml: formatCostPills(wormholeCost, haveBag),
+      };
+    }
+
     return {
       needsMoonChoice: this.empire.needsOutpostMoonChoice(),
       nextAnnex,
@@ -440,6 +492,21 @@ export class App {
             kind: 'planet',
             systemId: this.empire.state.homeSystemId,
             planetId: before.id,
+          });
+        }
+      },
+      nextWormhole,
+      claimNextWormhole: () => {
+        const before = this.empire.nextWormholeTarget();
+        if (!before) return;
+        if (this.empire.claimNextWormhole()) {
+          // Fly the player into the freshly claimed system so the vortex
+          // visual lands in view immediately and the new T2 multiplier
+          // reads as a tangible reward.
+          this.navigateTo({
+            kind: 'system',
+            systemId: before.id,
+            planetId: null,
           });
         }
       },
@@ -520,6 +587,126 @@ export class App {
     this.moonOutpostMoonId = cfg.moonId;
   }
 
+  // W7 — build the active wormhole-vortex set + galaxy-view connection lines.
+  // Every connected system gets a vortex tinted by its owner's color, and
+  // each (home, T2) pair gets a thin line drawn between them in galaxy view.
+  // Cheap-skips when the resulting connection set hasn't changed since the
+  // last call, so a routine resource tick doesn't rebuild meshes.
+  private rebuildWormholesIfNeeded(): void {
+    const targets = new Map<string, string>();
+    // Each connection is a pair of system ids + the owner colour, used to
+    // build the line segment buffer below.
+    const connections: { a: string; b: string; color: string }[] = [];
+
+    // Self contributions — only when the empire has actually opened a rift.
+    if (
+      this.empire.state.homeClaimed &&
+      this.empire.hasClaimedWormholeSystem()
+    ) {
+      const selfColor = this.session.profile.color;
+      const home = this.empire.state.homeSystemId;
+      targets.set(home, selfColor);
+      for (const sysId of this.empire.wormholeSystemIds()) {
+        targets.set(sysId, selfColor);
+        connections.push({ a: home, b: sysId, color: selfColor });
+      }
+    }
+
+    // Remote contributions (MP). Each remote player who has claimed a T2
+    // system contributes their home + every claimed T2 to the active set,
+    // tinted by their profile color. Self entries take priority on overlap.
+    if (this.mpClient) {
+      for (const p of this.mpClient.remotePlayers()) {
+        const remoteHome = p.state.systemId;
+        if (!remoteHome) continue;
+        const remoteT2: string[] = [];
+        for (const [sid, tier] of Object.entries(p.state.claimedSystems ?? {})) {
+          if (sid !== remoteHome && tier >= 2) remoteT2.push(sid);
+        }
+        if (remoteT2.length === 0) continue;
+        if (!targets.has(remoteHome)) targets.set(remoteHome, p.profile.color);
+        for (const sid of remoteT2) {
+          if (!targets.has(sid)) targets.set(sid, p.profile.color);
+          connections.push({ a: remoteHome, b: sid, color: p.profile.color });
+        }
+      }
+    }
+
+    // Cache key includes both vortex targets AND connection pairs since two
+    // different connection layouts could share the same target set.
+    const targetsKey = Array.from(targets.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}:${v}`)
+      .join('|');
+    const connectionsKey = connections
+      .map((c) => `${c.a}-${c.b}-${c.color}`)
+      .sort()
+      .join(',');
+    const key = `${targetsKey}#${connectionsKey}`;
+    if (key === this.wormholeKey) return;
+    this.wormholeKey = key;
+
+    // Drop any vortex that's no longer in the active set.
+    for (const [sid, handle] of this.wormholes) {
+      if (!targets.has(sid)) {
+        disposeWormhole(handle);
+        this.wormholes.delete(sid);
+      }
+    }
+
+    // Add or recolor every active entry.
+    for (const [sid, color] of targets) {
+      const existing = this.wormholes.get(sid);
+      if (existing) {
+        existing.material.uniforms.uColorInner.value = new THREE.Color(color);
+        continue;
+      }
+      const sys = this.galaxy.systems.get(sid);
+      if (!sys) continue;
+      const handle = makeWormhole(sys.data.starRadius, color);
+      attachWormholeToSystem(handle, sys);
+      this.wormholes.set(sid, handle);
+    }
+
+    // Rebuild the connection-line buffer. Single LineSegments object covers
+    // every connection — vertex colours so each line gets the right tint.
+    if (this.connectionLines) {
+      this.connectionLines.geometry.dispose();
+      (this.connectionLines.material as THREE.Material).dispose();
+      this.galaxy.root.remove(this.connectionLines);
+      this.connectionLines = null;
+    }
+    if (connections.length > 0) {
+      const positions: number[] = [];
+      const colors: number[] = [];
+      for (const c of connections) {
+        const sa = this.galaxy.systems.get(c.a);
+        const sb = this.galaxy.systems.get(c.b);
+        if (!sa || !sb) continue;
+        const pa = sa.data.position;
+        const pb = sb.data.position;
+        positions.push(pa[0], pa[1], pa[2], pb[0], pb[1], pb[2]);
+        const col = new THREE.Color(c.color);
+        colors.push(col.r, col.g, col.b, col.r, col.g, col.b);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      const mat = new THREE.LineBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      this.connectionLines = new THREE.LineSegments(geo, mat);
+      // Lines only meaningful in galaxy view — at system / planet view their
+      // endpoints are far off-screen and add visual noise.
+      this.connectionLines.visible = this.state.kind === 'galaxy';
+      this.galaxy.root.add(this.connectionLines);
+    }
+  }
+
   // Build the planet/system → owner maps used by labels + leaderboard. Returns
   // empty maps when no relay is wired up (solo mode), so the rest of the
   // pipeline works the same way regardless of mode.
@@ -567,6 +754,32 @@ export class App {
         // by remotePlayers()).
         this.mpLeaderboard?.render(this.mpClient?.remotePlayers() ?? []);
         this.refreshHomeMarkers();
+        // W7 — remote players' wormhole connections may have appeared or
+        // shifted, so rebuild the vortex set as well.
+        this.rebuildWormholesIfNeeded();
+      },
+      onTradeMatched: ({ counterpartName, counterpartColor, asInitiator }) => {
+        // W7 — actually run the swap on whichever side initiated. Counterparts
+        // get a cosmetic-only banner since their resources don't change here
+        // (the other player will run their own swap and broadcast their state).
+        if (asInitiator) {
+          const swap = this.empire.executeTrade();
+          if (swap) {
+            this.showTradeToast(counterpartName, counterpartColor, swap);
+          }
+        } else {
+          this.showTradeNotice(counterpartName, counterpartColor);
+        }
+      },
+      onTradeFailed: (reason) => {
+        // W7 — server-side rate-limit or no counterparts. The "no-counterpart"
+        // path falls back to the NPC trader so the player still gets a swap;
+        // the cooldown path just shows a wait toast.
+        if (reason === 'no-counterpart') {
+          this.runNpcTrade();
+        } else {
+          this.showTradeStatus('Trade hub cooling down — try again in a moment.');
+        }
       },
     });
     this.mpLeaderboard = new Leaderboard(this.overlay);
@@ -615,8 +828,93 @@ export class App {
       ownedPlanets: st.ownedPlanets,
       outpostMoonId: st.outpostMoonId,
       claimedSystems: st.claimedSystems,
+      tradeHubReady: this.empire.hasUnlock('trade-hub'),
     };
     this.mpClient.publishState(payload);
+  }
+
+  // ---- W7: Trade Hub ------------------------------------------------------
+
+  // Trade button click: in MP, ask the relay to find a counterpart; in solo
+  // (or when the relay is offline / has no counterparts), run an NPC trade
+  // immediately so the player always gets feedback from the click.
+  private handleTradeClick(): void {
+    if (!this.empire.hasUnlock('trade-hub')) return;
+    if (Date.now() < this.tradeCooldownUntil) return;
+    // Tentatively start the cooldown so the button is visibly disabled while
+    // we're waiting on the relay. If the trade fails for cooldown reasons
+    // (server rate-limit), the toast tells the player to wait.
+    this.tradeCooldownUntil = Date.now() + 60_000;
+    if (this.mpClient && this.mpClient.isOnline()) {
+      this.mpClient.requestTrade();
+    } else {
+      this.runNpcTrade();
+    }
+  }
+
+  // Solo / no-counterpart fallback: trade with the "Galactic Exchange" NPC
+  // at the same 2:1 ratio so the player has a deterministic offline option.
+  private runNpcTrade(): void {
+    const swap = this.empire.executeTrade();
+    if (!swap) {
+      this.showTradeStatus('Not enough stockpile to trade — keep producing.');
+      return;
+    }
+    this.showTradeToast('Galactic Exchange', '#9be8ff', swap);
+  }
+
+  // Build a small toast describing the executed swap. Auto-dismisses after
+  // 4.5s. Multiple toasts stack vertically inside trade-toast-layer.
+  private showTradeToast(name: string, color: string, swap: TradeSwap): void {
+    if (!this.tradeToastLayer) return;
+    const toast = document.createElement('div');
+    toast.className = 'trade-toast';
+    const giveLabel = RESOURCE_LABEL[swap.give.resource];
+    const getLabel  = RESOURCE_LABEL[swap.get.resource];
+    const giveColor = RESOURCE_COLOR[swap.give.resource];
+    const getColor  = RESOURCE_COLOR[swap.get.resource];
+    toast.innerHTML = `
+      <div class="trade-toast-eyebrow">Trade with <strong style="color:${escapeAttr(color)}">${escapeHtml(name)}</strong></div>
+      <div class="trade-toast-row trade-toast-give" style="--c:${escapeAttr(giveColor)}">
+        <span class="trade-toast-dot"></span>
+        <span class="trade-toast-amt">−${formatTradeAmt(swap.give.amount)}</span>
+        <span class="trade-toast-label">${escapeHtml(giveLabel)}</span>
+      </div>
+      <div class="trade-toast-row trade-toast-get" style="--c:${escapeAttr(getColor)}">
+        <span class="trade-toast-dot"></span>
+        <span class="trade-toast-amt">+${formatTradeAmt(swap.get.amount)}</span>
+        <span class="trade-toast-label">${escapeHtml(getLabel)}</span>
+      </div>
+    `;
+    this.tradeToastLayer.appendChild(toast);
+    setTimeout(() => toast.remove(), 4500);
+  }
+
+  // W7 — counterpart-side notice. Only shown when *another* player picked us
+  // as their trade counterpart; our resources don't change but the player
+  // gets a heads-up that their hub was used.
+  private showTradeNotice(name: string, color: string): void {
+    if (!this.tradeToastLayer) return;
+    const toast = document.createElement('div');
+    toast.className = 'trade-toast trade-toast-notice';
+    toast.innerHTML = `
+      <div class="trade-toast-eyebrow">Hub used by <strong style="color:${escapeAttr(color)}">${escapeHtml(name)}</strong></div>
+      <div class="trade-toast-row">
+        <span class="trade-toast-amt">No resource change</span>
+        <span class="trade-toast-label">cosmetic</span>
+      </div>
+    `;
+    this.tradeToastLayer.appendChild(toast);
+    setTimeout(() => toast.remove(), 3500);
+  }
+
+  private showTradeStatus(text: string): void {
+    if (!this.tradeToastLayer) return;
+    const toast = document.createElement('div');
+    toast.className = 'trade-toast trade-toast-status';
+    toast.textContent = text;
+    this.tradeToastLayer.appendChild(toast);
+    setTimeout(() => toast.remove(), 3500);
   }
 
   private makeMpBanner(): HTMLDivElement {
@@ -665,6 +963,8 @@ export class App {
     //    happens inside Empire.
     this.empire.tick(dt);
     this.hud.update(dt);
+    // W7 — trade cooldown drives the button label/state. Cheap; no save churn.
+    this.hud.setTradeCooldown(this.tradeCooldownUntil - Date.now());
     this.upgradePanel.tickLive(performance.now());
     if (this.surface) {
       updateSurface(this.surface, dt, this.empire.computeMetrics());
@@ -675,6 +975,13 @@ export class App {
         this.state.systemId === this.empire.state.homeSystemId;
       setMoonOutpostVisible(this.moonOutpost, inHomeSystem);
       updateMoonOutpost(this.moonOutpost, dt);
+    }
+    // W7 — every active wormhole vortex spins + billboards toward the camera.
+    if (this.wormholes.size > 0) {
+      const camPos = this.camera.position;
+      for (const handle of this.wormholes.values()) {
+        updateWormhole(handle, dt, camPos);
+      }
     }
 
     // 1. Advance the world first. Slow galactic rotation around the central
@@ -745,3 +1052,21 @@ function formatNumber(n: number): string {
   if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   return `${(n / 1_000_000_000).toFixed(2)}B`;
 }
+
+// Shorter formatter for trade banners — drops decimals on small whole-number
+// trades so a 100 → 50 swap reads as "−100 / +50" instead of "−100.0 / +50.0".
+function formatTradeAmt(n: number): string {
+  if (n < 100) return Math.round(n).toString();
+  return formatNumber(n);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (ch) =>
+    ch === '&' ? '&amp;' :
+    ch === '<' ? '&lt;'  :
+    ch === '>' ? '&gt;'  :
+    ch === '"' ? '&quot;' : '&#39;'
+  );
+}
+
+function escapeAttr(s: string): string { return escapeHtml(s); }

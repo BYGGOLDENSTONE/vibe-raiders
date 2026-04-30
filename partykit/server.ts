@@ -22,12 +22,24 @@ import type {
 const MAX_PLAYERS = 16;
 const STALE_MS = 24 * 60 * 60 * 1000; // 24 hours offline → slot freed
 const PLAYERS_KEY = 'players.v1';
+// W7 — minimum gap between trade requests from the same player, in ms. Light
+// rate-limit so a buggy/spammy client can't flood the room. Client also has
+// its own 60s cooldown for UX, this is the server's safety net.
+const TRADE_COOLDOWN_MS = 30 * 1000;
+// W7 — counterpart must have been seen within this window to be considered
+// online and eligible for matchmaking. Avoids matching with players who left
+// hours ago but haven't been swept yet.
+const COUNTERPART_FRESH_MS = 5 * 60 * 1000;
 
 type PlayerTable = Record<string, PublicPlayer>;
 
 export default class GalaxyServer implements Party.Server {
   private players: PlayerTable = {};
   private loaded = false;
+  // Map of playerId → last trade-request wall-clock ms. Lives in memory only;
+  // a server restart drops cooldowns, which is fine — the client cooldown
+  // still gates legit usage.
+  private lastTradeAt: Record<string, number> = {};
 
   constructor(readonly room: Party.Room) {}
 
@@ -114,9 +126,71 @@ export default class GalaxyServer implements Party.Server {
             ownedPlanets: dedupe(incoming.ownedPlanets),
             outpostMoonId: incoming.outpostMoonId,
             claimedSystems: incoming.claimedSystems ?? {},
+            tradeHubReady: !!incoming.tradeHubReady,
           };
         });
         break;
+      case 'trade-request':
+        await this.handleTradeRequest(sender, playerId);
+        break;
+    }
+  }
+
+  // W7 — pick any other tradeHubReady player and notify both sides that a
+  // trade just happened. Each client handles the resource swap locally since
+  // resources are private. The room only knows "X traded with Y".
+  private async handleTradeRequest(sender: Party.Connection, playerId: string) {
+    const requester = this.players[playerId];
+    if (!requester || !requester.state.tradeHubReady) {
+      send(sender, { kind: 'trade-failed', reason: 'no-counterpart' });
+      return;
+    }
+    const now = Date.now();
+    const last = this.lastTradeAt[playerId] ?? 0;
+    if (now - last < TRADE_COOLDOWN_MS) {
+      send(sender, { kind: 'trade-failed', reason: 'cooldown' });
+      return;
+    }
+
+    // Eligible counterparts: any other player who has trade-hub ready AND
+    // has been seen recently (so we don't match with someone who left).
+    const candidates: PublicPlayer[] = [];
+    for (const p of Object.values(this.players)) {
+      if (p.id === playerId) continue;
+      if (!p.state.tradeHubReady) continue;
+      if (now - p.lastSeen > COUNTERPART_FRESH_MS) continue;
+      candidates.push(p);
+    }
+
+    if (candidates.length === 0) {
+      send(sender, { kind: 'trade-failed', reason: 'no-counterpart' });
+      return;
+    }
+
+    const pickedIndex = Math.floor(Math.random() * candidates.length);
+    const counterpart = candidates[pickedIndex]!;
+    this.lastTradeAt[playerId] = now;
+
+    // Notify the requester. Counterpart also gets a heads-up so their UI
+    // can pop a "your hub matched a trade with X" banner — purely cosmetic
+    // since their resources don't change here.
+    send(sender, {
+      kind: 'trade-matched',
+      counterpartId: counterpart.id,
+      counterpartName: counterpart.profile.name,
+      counterpartColor: counterpart.profile.color,
+      asInitiator: true,
+    });
+    for (const conn of this.room.getConnections()) {
+      const cs = conn.state as ConnState | null;
+      if (cs?.playerId !== counterpart.id) continue;
+      send(conn, {
+        kind: 'trade-matched',
+        counterpartId: requester.id,
+        counterpartName: requester.profile.name,
+        counterpartColor: requester.profile.color,
+        asInitiator: false,
+      });
     }
   }
 
@@ -229,6 +303,7 @@ function makePlaceholder(playerId: string, now: number): PublicPlayer {
     ownedPlanets: [],
     outpostMoonId: null,
     claimedSystems: {},
+    tradeHubReady: false,
   };
   return { id: playerId, profile, state, lastSeen: now };
 }

@@ -15,6 +15,10 @@ export interface PublicEmpireState {
   ownedPlanets: string[];
   outpostMoonId: string | null;
   claimedSystems: Record<string, number>;
+  // W7 — true once the player has unlocked the Trade Hub upgrade. Used by
+  // the relay to match trade-requests with eligible counterparts. Resources
+  // themselves stay private; the relay only knows "this player can trade."
+  tradeHubReady: boolean;
 }
 
 export interface PublicPlayer {
@@ -35,7 +39,11 @@ export type ClientMessage =
   // already-assigned system get that same system back regardless of the list.
   | { kind: 'claim-system'; preferred: string[] }
   | { kind: 'update-profile'; profile: PlayerProfile }
-  | { kind: 'update-state'; state: PublicEmpireState };
+  | { kind: 'update-state'; state: PublicEmpireState }
+  // W7 — Trade Hub matchmaking. Server picks an eligible counterpart (any
+  // other player with tradeHubReady=true) and informs both sides. The actual
+  // resource swap is computed locally per side since resources are private.
+  | { kind: 'trade-request' };
 
 // --- Server → Client ---------------------------------------------------------
 
@@ -45,4 +53,17 @@ export type ServerMessage =
   | { kind: 'system-claim-failed'; reason: 'no-systems-available' | 'invalid' }
   | { kind: 'player-joined'; player: PublicPlayer }
   | { kind: 'player-updated'; player: PublicPlayer }
-  | { kind: 'player-left'; playerId: string };
+  | { kind: 'player-left'; playerId: string }
+  // W7 — Trade Hub matchmaking. Sent to BOTH parties (requester +
+  // counterpart) so each can render an "informed" banner with the other's
+  // identity. Resource math is local per side.
+  | {
+      kind: 'trade-matched';
+      counterpartId: string;
+      counterpartName: string;
+      counterpartColor: string;
+      // Whether the local player initiated this trade (true) or was the
+      // counterpart somebody else picked (false). Drives the banner copy.
+      asInitiator: boolean;
+    }
+  | { kind: 'trade-failed'; reason: 'no-counterpart' | 'cooldown' };

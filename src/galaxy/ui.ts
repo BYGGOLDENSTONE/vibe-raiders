@@ -50,7 +50,7 @@ interface HomeCtx {
   fullSystemClaimed: boolean;
 }
 
-// Slim hook surface UI uses to render the W4-E / W6-E claim flows without
+// Slim hook surface UI uses to render the W4-E / W6-E / W7 claim flows without
 // taking a hard dependency on Empire (keeps galaxy/* free of empire types).
 export interface EmpireCtx {
   needsMoonChoice: boolean;
@@ -62,6 +62,15 @@ export interface EmpireCtx {
     costHtml: string;     // pre-formatted cost pills, same renderer as upgrades
   } | null;
   claimNextAnnex: () => void;
+  // W7 — wormhole system annex. Appears only after the home system is fully
+  // claimed AND wormhole-transit is unlocked AND the player hasn't claimed
+  // a T2 system yet. Targets the closest unclaimed system in galaxy coords.
+  nextWormhole: {
+    systemName: string;
+    canAfford: boolean;
+    costHtml: string;
+  } | null;
+  claimNextWormhole: () => void;
 }
 
 export class UI {
@@ -78,6 +87,8 @@ export class UI {
     needsMoonChoice: false,
     nextAnnex: null,
     claimNextAnnex: () => {},
+    nextWormhole: null,
+    claimNextWormhole: () => {},
   };
   private layer: LayerState = { kind: 'galaxy', systemId: null, planetId: null };
 
@@ -111,13 +122,19 @@ export class UI {
     this.banner.style.display = 'none';
     root.appendChild(this.banner);
 
-    // W6-E: the "Annex" button now lives inside the banner instead of the
-    // per-planet panel. One delegated click handler routes any banner
-    // button back into the empire layer.
+    // W6-E + W7: banner buttons are routed by a single delegated handler.
+    // Each button declares its action via a data attribute so future flows
+    // (trade hub, etc.) can plug in without rewiring this listener.
     this.banner.addEventListener('click', (e) => {
-      const btn = (e.target as HTMLElement).closest('[data-claim-next]') as HTMLElement | null;
-      if (!btn) return;
-      this.empireCtx.claimNextAnnex();
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-claim-next]')) {
+        this.empireCtx.claimNextAnnex();
+        return;
+      }
+      if (target.closest('[data-claim-wormhole]')) {
+        this.empireCtx.claimNextWormhole();
+        return;
+      }
     });
 
     this.hint = el('div', 'gx-hint');
@@ -148,10 +165,11 @@ export class UI {
   }
 
   private renderBanner(): void {
-    // Banner priority: moon-pick (W4-E) over annex (W6-E). Moon-pick is a
-    // one-shot follow-up to a specific purchase, while annex sits there
-    // for the entire system-expansion phase and shouldn't drown out the
-    // moon prompt the moment it appears.
+    // Banner priority: moon-pick (W4-E) over home-system annex (W6-E) over
+    // wormhole annex (W7). Moon-pick is a one-shot prompt and should win;
+    // home-system annex sits there for the entire expansion phase; wormhole
+    // only appears once the home system is full and transit is unlocked, so
+    // by then the planet-annex banner is already gone.
     let html = '';
     let extraClass = '';
     if (this.empireCtx.needsMoonChoice) {
@@ -173,6 +191,20 @@ export class UI {
         <button class="${btnClass}" data-claim-next ${btnAttrs}>Annex</button>
       `;
       extraClass = 'gx-banner-annex';
+    } else if (this.empireCtx.nextWormhole) {
+      const { systemName, canAfford, costHtml } = this.empireCtx.nextWormhole;
+      const btnClass = canAfford ? 'gx-annex-banner-btn ready' : 'gx-annex-banner-btn waiting';
+      const btnAttrs = canAfford ? '' : 'disabled';
+      html = `
+        <span class="gx-banner-ico">✺</span>
+        <span class="gx-banner-text">
+          <span class="gx-banner-eyebrow">Wormhole annex · T2 ×100</span>
+          <strong>${escapeHtml(systemName)}</strong>
+        </span>
+        <span class="gx-annex-banner-cost">${costHtml}</span>
+        <button class="${btnClass}" data-claim-wormhole ${btnAttrs}>Open Rift</button>
+      `;
+      extraClass = 'gx-banner-annex gx-banner-wormhole';
     }
     this.banner.className = 'gx-banner' + (extraClass ? ' ' + extraClass : '');
     if (html) {

@@ -21,6 +21,24 @@ import { CORE_NODE_ID, NODES_BY_ID, UPGRADE_NODES, canAfford, subtractCost } fro
 const SYSTEM_PLANET_CLAIM_BASE: Partial<ResourceBag> = { metal: 5000, water: 3000, crystal: 2000 };
 const SYSTEM_PLANET_CLAIM_GROWTH = 1.6;
 
+// W7 — wormhole annex cost. Fixed (not scaling) since the player only ever
+// claims one second system in the current MVP — T2 multiplier is the reward.
+// Sized in the millions so it's a real "endgame economy goal" rather than a
+// trivial follow-up to buying wormhole-transit.
+const WORMHOLE_CLAIM_COST: Partial<ResourceBag> = {
+  metal: 5_000_000,
+  water: 3_000_000,
+  crystal: 2_000_000,
+};
+
+// W7 — single trade swap. Same shape used by previewTrade (UI hover) and
+// executeTrade (the actual mutation), so banner code can render both with
+// the same formatter.
+export interface TradeSwap {
+  give: { resource: ResourceKey; amount: number };
+  get:  { resource: ResourceKey; amount: number };
+}
+
 export interface EmpireMetrics {
   rates: ResourceBag;
   caps: ResourceBag;
@@ -248,6 +266,151 @@ export class Empire {
     const target = this.nextAnnexTarget();
     if (!target) return false;
     return this.claimSystemPlanet(target.id);
+  }
+
+  // --- W7: Wormhole Transit ------------------------------------------------
+  //
+  // Once `wormhole-transit` is unlocked AND the home system is fully claimed
+  // (gate already enforced by isVisible for unlock-observatory et al.), the
+  // player can annex one second system at T2 (×100 multiplier). The MVP caps
+  // wormhole expansion at a single second system — T3+ deferred to a later
+  // wave. After the claim, every planet in the target system is owned in one
+  // shot (no per-planet annex flow), and the wormhole banner disappears.
+
+  // True once the player has bought the wormhole-transit upgrade. Visibility
+  // of the upgrade itself is already gated by isHomeSystemFullyClaimed via
+  // isVisible(), so this is just the "ready to claim a wormhole target" flag.
+  canStartWormhole(): boolean {
+    if (!this.hasUnlock('wormhole-transit')) return false;
+    if (this.hasClaimedWormholeSystem()) return false;
+    return true;
+  }
+
+  // True once any non-home system has tier ≥ 2 in claimedSystems.
+  hasClaimedWormholeSystem(): boolean {
+    for (const [sysId, tier] of Object.entries(this.state.claimedSystems)) {
+      if (sysId !== this.state.homeSystemId && tier >= 2) return true;
+    }
+    return false;
+  }
+
+  // Pick the unclaimed system closest to the home system (galaxy 3D distance).
+  // Returns null when wormhole-transit isn't bought yet, when home isn't set,
+  // or when the player has already claimed their second system.
+  nextWormholeTarget(): SystemData | null {
+    if (!this.canStartWormhole()) return null;
+    const home = this.homeSystem();
+    if (!home) return null;
+    const [hx, hy, hz] = home.position;
+    let best: SystemData | null = null;
+    let bestD = Infinity;
+    for (const s of this.galaxy.systems) {
+      if (s.id === home.id) continue;
+      // Skip systems already claimed by this empire — there shouldn't be any
+      // in MVP since wormhole locks itself out after one claim, but cheap.
+      if (this.state.claimedSystems[s.id]) continue;
+      const dx = s.position[0] - hx;
+      const dy = s.position[1] - hy;
+      const dz = s.position[2] - hz;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    return best;
+  }
+
+  wormholeClaimCost(): Partial<ResourceBag> {
+    return WORMHOLE_CLAIM_COST;
+  }
+
+  // Claim the next wormhole target as a T2 system. Bulk-adds every planet in
+  // that system to ownedPlanets so the player's resource pipe immediately
+  // benefits from the ×100 tier multiplier. Returns false when not affordable
+  // or no target is available.
+  claimNextWormhole(): boolean {
+    const target = this.nextWormholeTarget();
+    if (!target) return false;
+    const cost = this.wormholeClaimCost();
+    if (!canAfford(this.state.resources, cost)) return false;
+    subtractCost(this.state.resources, cost);
+    this.state.claimedSystems[target.id] = 2;
+    for (const p of target.planets) {
+      if (!this.state.ownedPlanets.includes(p.id)) {
+        this.state.ownedPlanets.push(p.id);
+      }
+    }
+    this.save();
+    this.emit();
+    return true;
+  }
+
+  // Returns every system this empire has claimed at T2 or higher. Used by the
+  // galaxy-view connection line renderer (W7-C) and any UI that wants to list
+  // wormhole-connected systems.
+  wormholeSystemIds(): string[] {
+    const out: string[] = [];
+    for (const [sysId, tier] of Object.entries(this.state.claimedSystems)) {
+      if (sysId !== this.state.homeSystemId && tier >= 2) out.push(sysId);
+    }
+    return out;
+  }
+
+  // --- W7: Trade Hub --------------------------------------------------------
+  //
+  // Trade swaps a chunk of the player's most-abundant resource for half as
+  // much of their least-abundant resource (2:1 ratio favouring the rare one,
+  // since "rare" is what the player wants from a trade). Resources are
+  // private per W6 design — the relay just confirms whether a counterpart
+  // exists, and each side runs this swap locally.
+
+  // Returns the swap that *would* happen if the player traded right now.
+  // Returns null when the player can't trade (no unlock yet, or doesn't
+  // have meaningful stocks to swap).
+  previewTrade(): TradeSwap | null {
+    if (!this.hasUnlock('trade-hub')) return null;
+    const bag = this.state.resources;
+
+    let giveKey: ResourceKey | null = null;
+    let giveStock = 0;
+    for (const k of RESOURCE_KEYS) {
+      if (bag[k] > giveStock) { giveStock = bag[k]; giveKey = k; }
+    }
+    // Trades smaller than 100 of the abundant resource aren't worth firing.
+    if (!giveKey || giveStock < 100) return null;
+
+    let getKey: ResourceKey | null = null;
+    let getStock = Infinity;
+    for (const k of RESOURCE_KEYS) {
+      if (k === giveKey) continue;
+      if (bag[k] < getStock) { getStock = bag[k]; getKey = k; }
+    }
+    if (!getKey) return null;
+
+    const giveAmount = giveStock * 0.2;
+    // 2:1 — give X of abundant → gain X/2 of rare. Tilted toward the rare
+    // resource so the player feels rewarded even when the give is large.
+    const getAmount = giveAmount * 0.5;
+    return {
+      give: { resource: giveKey, amount: giveAmount },
+      get:  { resource: getKey,  amount: getAmount },
+    };
+  }
+
+  // Apply the trade. Returns the resolved swap (with capped get amount) on
+  // success, null if no trade was possible. Caller is responsible for
+  // surfacing the banner UI; this method just mutates state + emits.
+  executeTrade(): TradeSwap | null {
+    const swap = this.previewTrade();
+    if (!swap) return null;
+    const bag = this.state.resources;
+    const m = this.computeMetrics();
+    bag[swap.give.resource] -= swap.give.amount;
+    if (bag[swap.give.resource] < 0) bag[swap.give.resource] = 0;
+    const cap = m.caps[swap.get.resource];
+    const targetAmount = bag[swap.get.resource] + swap.get.amount;
+    bag[swap.get.resource] = Math.min(cap, targetAmount);
+    this.save();
+    this.emit();
+    return swap;
   }
   // Resolve the chosen outpost moon back to a planet/system pair so income can
   // be tier-scaled and the renderer knows where to attach the dome.

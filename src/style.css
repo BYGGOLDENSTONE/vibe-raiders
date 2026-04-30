@@ -297,6 +297,32 @@ html, body {
   text-shadow: 0 0 12px rgba(255, 212, 122, 0.6);
 }
 
+/* W7 — wormhole annex banner uses violet+cyan to match the rift visual. */
+.gx-banner.gx-banner-wormhole {
+  border-color: rgba(157, 200, 255, 0.6);
+  color: #d8ecff;
+  background: linear-gradient(
+    180deg,
+    rgba(40, 28, 70, 0.85),
+    rgba(20, 28, 56, 0.85)
+  );
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4), 0 0 28px rgba(157, 108, 255, 0.18);
+}
+.gx-banner-wormhole strong { color: #fff; }
+.gx-banner-wormhole .gx-banner-ico {
+  color: #c9b8ff;
+  text-shadow: 0 0 12px rgba(157, 108, 255, 0.8);
+}
+.gx-banner-wormhole .gx-banner-eyebrow { color: rgba(217, 200, 255, 0.7); }
+.gx-banner-wormhole .gx-annex-banner-btn {
+  border-color: rgba(157, 200, 255, 0.7);
+  background: linear-gradient(180deg, rgba(157, 108, 255, 0.32), rgba(78, 195, 255, 0.18));
+}
+.gx-banner-wormhole .gx-annex-banner-btn.ready:hover {
+  background: linear-gradient(180deg, rgba(157, 108, 255, 0.5), rgba(78, 195, 255, 0.28));
+  border-color: rgba(157, 200, 255, 0.95);
+}
+
 /* W5 — annex button on the planet panel for system-expansion claims */
 .gx-annex-btn {
   display: flex;
@@ -728,6 +754,98 @@ html, body {
 @keyframes em-hud-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(122, 223, 156, 0.45); }
   50%      { box-shadow: 0 0 0 8px rgba(122, 223, 156, 0); }
+}
+
+/* W7 — Trade Hub button + toast banners. Trade button shares the upgrades
+   button silhouette (same height/spacing) so the HUD reads as one row. */
+.em-hud-btn-trade {
+  background: rgba(157, 108, 255, 0.12);
+  border-color: rgba(157, 108, 255, 0.45);
+}
+.em-hud-btn-trade:hover {
+  background: rgba(157, 108, 255, 0.24);
+  border-color: rgba(157, 108, 255, 0.75);
+}
+.em-hud-btn-trade .em-hud-btn-icon { color: #c9b8ff; }
+.em-hud-btn-trade:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.em-hud-cooldown-wait {
+  color: #ffb878;
+  background: rgba(255, 184, 120, 0.10);
+}
+
+.trade-toast-layer {
+  position: fixed;
+  top: 110px;
+  right: 22px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  width: 280px;
+}
+.trade-toast {
+  pointer-events: auto;
+  background: linear-gradient(180deg, rgba(28, 22, 50, 0.92), rgba(14, 18, 32, 0.92));
+  border: 1px solid rgba(157, 108, 255, 0.45);
+  border-radius: 12px;
+  padding: 10px 14px;
+  color: var(--gx-fg);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5), 0 0 24px rgba(157, 108, 255, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  backdrop-filter: blur(6px);
+  animation: trade-toast-in 240ms ease-out, trade-toast-out 320ms ease-in 4180ms forwards;
+}
+.trade-toast-notice { border-color: rgba(126, 200, 255, 0.45); }
+.trade-toast-status {
+  border-color: rgba(255, 184, 120, 0.55);
+  font-size: 12px;
+  color: #ffd5a0;
+  animation: trade-toast-in 240ms ease-out, trade-toast-out 320ms ease-in 3180ms forwards;
+}
+@keyframes trade-toast-in {
+  from { opacity: 0; transform: translateX(40px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes trade-toast-out {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(40px); }
+}
+.trade-toast-eyebrow {
+  font-size: 10.5px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--gx-fg-dim);
+}
+.trade-toast-eyebrow strong { font-weight: 600; }
+.trade-toast-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.trade-toast-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c, #fff);
+  box-shadow: 0 0 6px var(--c, #fff);
+  align-self: center;
+}
+.trade-toast-amt { font-weight: 600; }
+.trade-toast-give .trade-toast-amt { color: #ff8775; }
+.trade-toast-get .trade-toast-amt { color: #7adf9c; }
+.trade-toast-label {
+  color: var(--gx-fg-dim);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 /* ---------- Upgrade modal ---------- */

@@ -31,6 +31,17 @@ export interface MultiplayerEvents {
   onSystemClaimFailed?: (reason: string) => void;
   // Connection status changes — used to drive the "reconnecting" banner.
   onStatusChanged?: (status: ConnectionStatus) => void;
+  // W7 — Trade Hub matchmaking. asInitiator=true when this client requested
+  // the trade, false when another player matched with us. Resource swap is
+  // computed locally per side regardless.
+  onTradeMatched?: (info: {
+    counterpartName: string;
+    counterpartColor: string;
+    asInitiator: boolean;
+  }) => void;
+  // No counterpart available, or rate-limited. Caller can fall back to the
+  // NPC trade flow (W7-D solo path).
+  onTradeFailed?: (reason: 'no-counterpart' | 'cooldown') => void;
 }
 
 export class MultiplayerClient {
@@ -133,6 +144,15 @@ export class MultiplayerClient {
     }
   }
 
+  // W7 — request a trade match. The server picks an eligible counterpart
+  // and notifies both sides. Dropped silently when offline; the App layer
+  // can fall back to NPC trading without us.
+  requestTrade(): void {
+    if (this.isOnline()) {
+      this.send({ kind: 'trade-request' });
+    }
+  }
+
   close(): void {
     this.socket.close();
   }
@@ -162,6 +182,16 @@ export class MultiplayerClient {
         break;
       case 'system-claim-failed':
         this.events.onSystemClaimFailed?.(msg.reason);
+        break;
+      case 'trade-matched':
+        this.events.onTradeMatched?.({
+          counterpartName: msg.counterpartName,
+          counterpartColor: msg.counterpartColor,
+          asInitiator: msg.asInitiator,
+        });
+        break;
+      case 'trade-failed':
+        this.events.onTradeFailed?.(msg.reason);
         break;
     }
   }

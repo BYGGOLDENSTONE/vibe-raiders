@@ -26,6 +26,9 @@ export class ResourceHUD {
   private droneChip: HTMLDivElement;
   private droneCountEl: HTMLSpanElement;
   private droneMulEl: HTMLSpanElement;
+  private tradeBtn: HTMLButtonElement;
+  private tradeCooldownEl: HTMLSpanElement;
+  private onTradeClick: () => void = () => {};
   private displayed: ResourceBag;
   private displayedRates: ResourceBag;
 
@@ -79,7 +82,52 @@ export class ResourceHUD {
     this.root.appendChild(this.button);
     this.buttonCount = this.button.querySelector('[data-count]') as HTMLSpanElement;
 
+    // W7 — Trade Hub button. Hidden until trade-hub unlock is owned, so it
+    // doesn't clutter the HUD pre-endgame. App wires the click handler via
+    // setTradeHandler() since trade matchmaking touches the multiplayer
+    // client which the HUD has no business knowing about directly.
+    this.tradeBtn = document.createElement('button');
+    this.tradeBtn.className = 'em-hud-btn em-hud-btn-trade';
+    this.tradeBtn.style.display = 'none';
+    this.tradeBtn.innerHTML = `
+      <span class="em-hud-btn-icon">⇄</span>
+      <span class="em-hud-btn-label">Trade</span>
+      <span class="em-hud-btn-count" data-cooldown></span>
+    `;
+    this.tradeBtn.addEventListener('click', () => this.onTradeClick());
+    this.root.appendChild(this.tradeBtn);
+    this.tradeCooldownEl = this.tradeBtn.querySelector('[data-cooldown]') as HTMLSpanElement;
+
     this.refresh();
+  }
+
+  // App wires its trade handler in here. Kept as a setter so the HUD doesn't
+  // need to import multiplayer types — the button just calls back when
+  // pressed and the App layer handles the matchmaking + local trade.
+  setTradeHandler(fn: () => void): void {
+    this.onTradeClick = fn;
+  }
+
+  // App calls this every frame so the cooldown counter ticks down. Pass the
+  // remaining cooldown ms; 0 (or negative) means ready.
+  setTradeCooldown(remainingMs: number): void {
+    if (remainingMs <= 0) {
+      this.tradeCooldownEl.textContent = 'READY';
+      this.tradeCooldownEl.classList.remove('em-hud-cooldown-wait');
+      this.tradeBtn.disabled = false;
+    } else {
+      const s = Math.ceil(remainingMs / 1000);
+      this.tradeCooldownEl.textContent = `${s}s`;
+      this.tradeCooldownEl.classList.add('em-hud-cooldown-wait');
+      this.tradeBtn.disabled = true;
+    }
+  }
+
+  // Show / hide the Trade button based on whether trade-hub is unlocked.
+  // Called from refresh(); no work needed beyond the inline read.
+  private updateTradeVisibility(): void {
+    const visible = this.empire.hasUnlock('trade-hub');
+    this.tradeBtn.style.display = visible ? '' : 'none';
   }
 
   private buildChip(k: ResourceKey): ChipDom {
@@ -143,6 +191,7 @@ export class ResourceHUD {
 
   refresh(): void {
     this.update(1);
+    this.updateTradeVisibility();
   }
 }
 

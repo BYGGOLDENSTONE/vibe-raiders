@@ -3,7 +3,7 @@
 > **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 6 complete. Multiplayer is live — a start screen lets players pick Solo or Multiplayer, MP uses a PartyKit relay (`partykit/server.ts`) with deterministic per-slot system assignment so each of up to 16 players spawns in a different rocky+moon system. Solo and MP keep separate save slots (`vibecoder.empire.v6` vs `vibecoder.empire.mp.v1`). System Expansion is now a single auto-targeted "Annex" banner button that always picks the closest unowned home-system planet — the per-planet annex click is gone (incremental-idle minimum-click feel). After every home-system planet is owned, the wormhole-observatory chain unlocks. Public ownership (claimed system + owned planets) is broadcast and rendered as colored player-name prefixes on labels plus a top-right leaderboard. Vibe Jam webring portal is wired: clicking the central black hole exits to `vibej.am/portal/2026?username=…&color=…&ref=…`, and incoming `?portal=true` traffic skips the start screen and shows a return-portal pill back to the originating game. Debug panel removed. Wormhole rift (W7) pending.
+> **Status:** Wave 7 complete. Wormhole transit is live — once the home system is fully claimed and `wormhole-transit` is bought, an auto-targeted "Open Rift" banner offers the closest unclaimed system at T2 (×100 multiplier, 5M/3M/2M cost). On claim, every planet in the target system enters `ownedPlanets` in one shot, and a violet vortex shader spins at both the home and the new system's stars (visible in galaxy + system view, billboard'd toward the camera, owner-coloured). Galaxy view also draws thin additive lines between connected systems for self + every remote player. Trade Hub (`trade-hub`) adds an HUD button that auto-trades 20% of the player's most-abundant resource for half as much of their least-abundant resource at a 2:1 ratio. In MP the relay matches a counterpart with `tradeHubReady=true` and informs both sides; offline / solo / no-counterpart falls back to a "Galactic Exchange" NPC. 60 s client cooldown + 30 s server safety net. T2 stops at one second system per the W7 design — T3+ deferred.
 
 ---
 
@@ -200,6 +200,48 @@ The W4-D claim flow that came back as a multiplayer requirement was redesigned a
 
 **Save:** solo still `vibecoder.empire.v6`. MP uses `vibecoder.empire.mp.v1`. Player identity for MP lives in `vibecoder.mp.playerId.v1`. Session config (mode + profile + optional portalRef) lives in `vibecoder.mp.session.v1`.
 
+### Wave 7 — wormhole transit + trade hub (this session)
+
+The endgame milestones from W4-A's economy plan are now playable. Wormhole annex turns the existing T2 multiplier into an actual claimable goal, and Trade Hub gives the late game a way to bridge resource gaps that planet-type ownership doesn't cover.
+
+**Wormhole annex (W7-A):**
+
+- New `Empire.canStartWormhole()`, `nextWormholeTarget()`, `wormholeClaimCost()`, `claimNextWormhole()`, `hasClaimedWormholeSystem()`, `wormholeSystemIds()`. Cost is fixed at `WORMHOLE_CLAIM_COST = {metal: 5M, water: 3M, crystal: 2M}` — not scaling, since the MVP only allows one second-system claim. T3+ deferred.
+- Target picker uses raw 3D galaxy distance from the home system's star, so the rift always opens to the visually-closest neighbour. No filter on the target's planet types — the player gets whatever's closest.
+- On claim, `claimedSystems[targetId] = 2` and every planet in that system is bulk-added to `ownedPlanets`. T2's ×100 tier multiplier kicks in immediately, giving a 100× boost to those planets' baseline income (computed by `tierOf` in `computeMetrics`).
+- Banner priority extended in `ui.ts`: moon-pick > home-system annex > wormhole annex. The wormhole banner only ever appears post-W6-E (home system fully claimed) and disappears once the second system is claimed.
+- `EmpireCtx` gained a sibling `nextWormhole` field with the same `{name, canAfford, costHtml}` shape as the W6 annex. Banner button uses `data-claim-wormhole` and a violet "✺ Wormhole annex · T2 ×100" copy. Camera flies to the freshly claimed system on success so the player sees the new vortex form.
+
+**Vortex visuals (W7-B):**
+
+- New `src/galaxy/wormhole.ts` — single billboard plane with a custom log-spiral fragment shader (5-arm + 3-arm counter-rotating swirl, hollow centre, soft outer fade, bloom ring at r≈0.55). Additive blending so it reads as a rift in space, not a solid disk. Sized at `max(starRadius * 9, 6)` so it's still visible from far in galaxy view.
+- Self-vortex tinted by `session.profile.color`, remote-vortex tinted by each remote player's profile color. Inner color is the owner; outer color stays a fixed deep violet so every rift shares a "deep space" base tone.
+- `App.rebuildWormholesIfNeeded()` builds the active set: union of (self home + self T2s) ∪ (each remote player's home + their T2s) — but only when an empire has at least one T2 (no rift = no vortex). Cheap-skips when the (sysId, color, connection-pair) key string hasn't changed since the last call. Per-frame work is just `lookAt(camera)` + uniform tick.
+
+**Galaxy-view connection lines (W7-C):**
+
+- Same data path as the vortex set produces a `connections: {a, b, color}[]` list of system pairs. A single `THREE.LineSegments` with vertex colors covers every connection (self + every remote player).
+- Visibility gated to galaxy view via `navigateTo` + the rebuild itself — system / planet view hide the lines because the endpoints are far off-screen and the streak would distract.
+
+**Trade Hub (W7-D):**
+
+- `Empire.previewTrade()` / `executeTrade()` — pick the most-abundant resource (must be ≥100), give 20% of that stock; pick the least-abundant *other* resource, gain 50% of the give amount. 2:1 ratio favours the rare one so the swap feels rewarding even when the give is large. Capped by the get resource's storage cap so trades never silently overflow.
+- HUD gains a new `em-hud-btn-trade` (`⇄ Trade · {cooldown}`) button right of Upgrades, hidden until `trade-hub` unlock is owned. App wires the click through `setTradeHandler()` so the HUD doesn't import multiplayer types.
+- Cooldown is 60 s on the client (drives button label from `setTradeCooldown`); 30 s on the server (`TRADE_COOLDOWN_MS`) as a spam-floor.
+- MP flow: client sends `trade-request` → server picks any other player with `tradeHubReady=true` whose `lastSeen < 5min` → both sides receive `trade-matched` (initiator runs the actual swap, counterpart gets a cosmetic "Hub used by …" notice).
+- Solo / no-counterpart / offline fallback: client runs `Empire.executeTrade()` directly with "Galactic Exchange" as the cosmetic counterpart name. Same 2:1 math.
+- Toast UI lives in a fixed-position `trade-toast-layer` (top-right under HUD), three variants: trade success (initiator), trade notice (counterpart), trade status (cooldown / not enough stockpile). Auto-dismiss after 3.5–4.5 s.
+
+**Relay extensions (W7-E):**
+
+- `PublicEmpireState` gained `tradeHubReady: boolean`. App publishes it from `empire.hasUnlock('trade-hub')` on every emit.
+- New protocol messages: `ClientMessage` adds `{kind: 'trade-request'}`; `ServerMessage` adds `{kind: 'trade-matched', counterpartId, counterpartName, counterpartColor, asInitiator}` and `{kind: 'trade-failed', reason: 'no-counterpart' | 'cooldown'}`.
+- `partykit/server.ts` adds `handleTradeRequest()` — validates the requester has `tradeHubReady`, enforces the 30 s server cooldown via in-memory `lastTradeAt`, picks a random eligible counterpart, sends `trade-matched` to both connections (uses `room.getConnections()` to find the counterpart's live conn). Falls back to `trade-failed: no-counterpart` when the room has no eligible peer.
+
+**Files touched:** `src/empire/empire.ts` (wormhole methods + `executeTrade` / `previewTrade` + `TradeSwap` interface), `src/galaxy/ui.ts` (`EmpireCtx.nextWormhole` + banner variant + delegated button router), `src/galaxy/app.ts` (wormhole rebuild + connection lines + trade flow + toast layer + visibility hooks in `navigateTo`/loop), `src/galaxy/wormhole.ts` (new — vortex shader + handle), `src/empire/hud.ts` (Trade button + cooldown setter + handler injection point), `src/multiplayer/protocol.ts` (`tradeHubReady` + trade messages), `src/multiplayer/client.ts` (`requestTrade` + `onTradeMatched` / `onTradeFailed` events), `partykit/server.ts` (`handleTradeRequest` + cooldown bookkeeping + tradeHubReady plumbing through `update-state`), `src/style.css` (wormhole banner variant, trade button + toast styles), `CLAUDE.md` (this entry).
+
+**Save:** still `vibecoder.empire.v6` / `vibecoder.empire.mp.v1`. No state shape change beyond `claimedSystems` already storing T2 entries; the wormhole flow only writes to fields that already existed. Old saves auto-heal as before.
+
 ### Known issue — solved
 
 The "single-resource progression deadlock" from W3 is gone:
@@ -253,7 +295,7 @@ gamejam/
 │   ├── portal.ts                   Wave-6 — Vibe Jam webring in/out + return-portal pill
 │   ├── style.css                   global UI + empire styles
 │   ├── galaxy/                     Wave-1 simulation
-│   │   ├── app.ts                  orchestrator + render loop (also hosts Empire tick + MP wiring)
+│   │   ├── app.ts                  orchestrator + render loop (also hosts Empire tick + MP wiring + W7 wormhole vortex / connection lines / trade flow)
 │   │   ├── camera-controller.ts
 │   │   ├── types.ts
 │   │   ├── rng.ts
@@ -267,7 +309,8 @@ gamejam/
 │   │   ├── galaxy.ts
 │   │   ├── labels.ts               + remote-owner markers (W6-F)
 │   │   ├── picking.ts              + 'portal' kind for the black hole proxy
-│   │   └── ui.ts                   breadcrumb, layer switcher, detail panel, annex banner
+│   │   ├── wormhole.ts             Wave-7 — vortex shader billboard at connected systems
+│   │   └── ui.ts                   breadcrumb, layer switcher, detail panel, annex banner (incl. W7 wormhole variant)
 │   ├── empire/                     Wave-2/3 gameplay layer
 │   │   ├── types.ts                ResourceKey, EmpireState, UpgradeNode, GameMode + storage keys
 │   │   ├── upgrades.ts             ~150-node skill tree catalogue (grouped into chains by panel.ts)
@@ -312,9 +355,9 @@ gamejam/
 | **W4-E** | ✅ Complete. Moon outpost claim flow — Moon Outpost unlock now prompts the player to click a moon; only the chosen moon contributes income and renders the dome/tether. |
 | **W5** | ✅ Complete. Auto-homeworld bootstrap on fresh save + System Expansion. Per-planet annex panel button later replaced by the W6-E single banner button. |
 | **W6** | ✅ Complete. PartyKit relay + start screen + per-slot spawn allocation + auto-annex banner + public ownership viz + Vibe Jam portal in/out. Debug panel removed. |
-| **W7** | Wormhole transit — claim a second system at T2 (×100 multiplier already wired in `claimedSystems`), visualised by a wormhole rift between systems. Trade Hub for inter-player resource swaps. Gated behind W6-E's "home system fully claimed → wormhole-observatory unlocks" milestone. |
+| **W7** | ✅ Complete. Wormhole annex banner (`5M/3M/2M cost`, closest-unclaimed target, T2 ×100 multiplier on bulk-claim) + violet vortex shader at every connected system + galaxy-view connection lines per owner + Trade Hub auto-trade (2:1 most-abundant → least-abundant, 60 s cooldown, MP relay matchmaking with NPC fallback). |
 
-Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live constants: `PLANET_INCOME`, `SYNERGY_PER_PLANET = 0.2`, `SYSTEM_TIER_BASE = 100`, `MOON_OUTPOST_INCOME = 5/s crystal`, `BASE_STORAGE_CAP = 1500`, `PROD_MUL_PER_TIER`, milestone costs in `src/empire/upgrades.ts` `expSteps`. W5 annex: `SYSTEM_PLANET_CLAIM_BASE = {metal:5000, water:3000, crystal:2000}`, `SYSTEM_PLANET_CLAIM_GROWTH = 1.6` in `src/empire/empire.ts`. Wave 4-B visuals: `DOME_DIAMETER_FRAC`, `TETHER_RADIUS_FRAC`, `SHUTTLE_COUNT`, `SHUTTLE_BASE_SPEED` in `src/empire/moon-outpost.ts`.
+Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live constants: `PLANET_INCOME`, `SYNERGY_PER_PLANET = 0.2`, `SYSTEM_TIER_BASE = 100`, `MOON_OUTPOST_INCOME = 5/s crystal`, `BASE_STORAGE_CAP = 1500`, `PROD_MUL_PER_TIER`, milestone costs in `src/empire/upgrades.ts` `expSteps`. W5 annex: `SYSTEM_PLANET_CLAIM_BASE = {metal:5000, water:3000, crystal:2000}`, `SYSTEM_PLANET_CLAIM_GROWTH = 1.6` in `src/empire/empire.ts`. W7 wormhole: `WORMHOLE_CLAIM_COST = {metal:5M, water:3M, crystal:2M}` in `src/empire/empire.ts`. W7 trade: 20% give / 50% return (2:1 ratio), 60 s client cooldown / 30 s server in `partykit/server.ts:TRADE_COOLDOWN_MS`. Wave 4-B visuals: `DOME_DIAMETER_FRAC`, `TETHER_RADIUS_FRAC`, `SHUTTLE_COUNT`, `SHUTTLE_BASE_SPEED` in `src/empire/moon-outpost.ts`.
 
 ---
 
