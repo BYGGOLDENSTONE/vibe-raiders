@@ -31,9 +31,11 @@ export interface MoonData {
   id: string;
   name: string;
   radius: number;
-  orbitRadius: number;
+  orbitRadius: number;        // semi-major axis
+  orbitEccentricity: number;  // 0 = circular, < 1 = ellipse
+  orbitOmega: number;         // argument of periapsis (rotation of major axis around Y)
   orbitSpeed: number;
-  orbitPhase: number;
+  orbitPhase: number;         // initial true anomaly
   orbitTilt: number;
   color: [number, number, number];
 }
@@ -43,9 +45,11 @@ export interface PlanetData {
   name: string;
   type: PlanetType;
   radius: number;
-  orbitRadius: number;
+  orbitRadius: number;        // semi-major axis
+  orbitEccentricity: number;  // 0 = circular
+  orbitOmega: number;         // argument of periapsis
   orbitSpeed: number;
-  orbitPhase: number;
+  orbitPhase: number;         // initial true anomaly
   orbitTilt: number;
   axialTilt: number;
   rotationSpeed: number;

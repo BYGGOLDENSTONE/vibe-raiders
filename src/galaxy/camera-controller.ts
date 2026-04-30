@@ -130,6 +130,12 @@ export class CameraController {
       this.transition.t += dt;
       const k = Math.min(1, this.transition.t / this.transition.duration);
       const e = easeInOutCubic(k);
+      // While transitioning toward a tracked node, refresh the destination from
+      // the node's live world position. This makes the camera smoothly chase a
+      // moving target instead of snapping when the transition ends.
+      if (this.trackedNode) {
+        this.trackedNode.getWorldPosition(this.transition.toTarget);
+      }
       this.target.copy(this.transition.fromTarget).lerp(this.transition.toTarget, e);
       this.distance = this.transition.fromDistance + (this.transition.toDistance - this.transition.fromDistance) * e;
       this.yaw = lerpAngle(this.transition.fromYaw, this.transition.toYaw, e);

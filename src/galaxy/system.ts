@@ -8,15 +8,19 @@ export interface SystemHandle {
   group: THREE.Group;
   star: StarHandle;
   planets: PlanetHandle[];
-  orbitLines: THREE.Line[];
+  orbitLines: THREE.Object3D[];
 }
 
-function buildOrbitLine(radius: number, tilt: number): THREE.Line {
-  const segs = 128;
+// Ellipse focused at origin: parametric (a*cos(E)-c, 0, b*sin(E)).
+// omega + tilt baked into a wrapping group so the line shares the planet's orbit frame.
+function buildOrbitLine(a: number, e: number, omega: number, tilt: number): THREE.Object3D {
+  const c = a * e;
+  const b = a * Math.sqrt(Math.max(0, 1 - e * e));
+  const segs = 192;
   const pts: number[] = [];
   for (let i = 0; i <= segs; i++) {
-    const a = (i / segs) * Math.PI * 2;
-    pts.push(Math.cos(a) * radius, 0, Math.sin(a) * radius);
+    const E = (i / segs) * Math.PI * 2;
+    pts.push(Math.cos(E) * a - c, 0, Math.sin(E) * b);
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
@@ -27,8 +31,12 @@ function buildOrbitLine(radius: number, tilt: number): THREE.Line {
     depthWrite: false,
   });
   const line = new THREE.Line(geo, mat);
-  line.rotation.x = tilt;
-  return line;
+  const wrap = new THREE.Group();
+  wrap.rotation.order = 'YXZ';
+  wrap.rotation.y = omega;
+  wrap.rotation.x = tilt;
+  wrap.add(line);
+  return wrap;
 }
 
 export function makeSystem(data: SystemData): SystemHandle {
@@ -39,12 +47,12 @@ export function makeSystem(data: SystemData): SystemHandle {
   group.add(star.group);
 
   const planets: PlanetHandle[] = [];
-  const orbitLines: THREE.Line[] = [];
+  const orbitLines: THREE.Object3D[] = [];
   for (const p of data.planets) {
     const ph = makePlanet(p);
     group.add(ph.group);
     planets.push(ph);
-    const line = buildOrbitLine(p.orbitRadius, p.orbitTilt);
+    const line = buildOrbitLine(p.orbitRadius, p.orbitEccentricity, p.orbitOmega, p.orbitTilt);
     orbitLines.push(line);
     group.add(line);
   }

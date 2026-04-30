@@ -4,20 +4,22 @@ import { PLANET_TYPE_INT, PLANET_VERT, PLANET_FRAG, MOON_VERT, MOON_FRAG } from 
 
 export interface PlanetHandle {
   data: PlanetData;
-  group: THREE.Group;        // orbit pivot (rotates around star)
-  pivot: THREE.Group;        // body anchor (after orbit position)
+  group: THREE.Group;        // orbit-plane frame (omega + tilt baked in)
+  pivot: THREE.Group;        // body anchor; position recomputed every frame from true anomaly
   body: THREE.Group;         // axial tilt + rotation node
   mesh: THREE.Mesh;
   material: THREE.ShaderMaterial;
   ring: THREE.Mesh | null;
   moons: MoonHandle[];
+  orbitAngle: number;        // current true anomaly
 }
 
 export interface MoonHandle {
   data: MoonData;
-  pivot: THREE.Group;
-  mesh: THREE.Mesh;
+  pivot: THREE.Group;        // orbit-plane frame for the moon (omega + tilt baked in)
+  mesh: THREE.Mesh;          // position updated each frame
   material: THREE.ShaderMaterial;
+  orbitAngle: number;
 }
 
 const PLANET_GEO_CACHE = new Map<number, THREE.SphereGeometry>();
@@ -70,12 +72,54 @@ void main() {
 }
 `;
 
+// Ellipse focused at origin, major axis along +X. omega/tilt baked into a wrapping group.
+function buildEllipseLine(
+  a: number,
+  e: number,
+  omega: number,
+  tilt: number,
+  opacity: number,
+  segments: number,
+): THREE.Object3D {
+  const c = a * e;
+  const b = a * Math.sqrt(Math.max(0, 1 - e * e));
+  const pts: number[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const E = (i / segments) * Math.PI * 2;
+    pts.push(Math.cos(E) * a - c, 0, Math.sin(E) * b);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  const mat = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+  });
+  const line = new THREE.Line(geo, mat);
+  const wrap = new THREE.Group();
+  wrap.rotation.order = 'YXZ';
+  wrap.rotation.y = omega;
+  wrap.rotation.x = tilt;
+  wrap.add(line);
+  return wrap;
+}
+
+function ellipseRadius(a: number, e: number, trueAnomaly: number): number {
+  return (a * (1 - e * e)) / (1 + e * Math.cos(trueAnomaly));
+}
+
 export function makePlanet(data: PlanetData, segments = 48): PlanetHandle {
-  const group = new THREE.Group(); // orbit pivot at star
+  const group = new THREE.Group();
+  // omega first (rotate major axis within orbit plane), then tilt (tilt the plane).
+  group.rotation.order = 'YXZ';
+  group.rotation.y = data.orbitOmega;
   group.rotation.x = data.orbitTilt;
-  // body anchor at orbitRadius
+
   const pivot = new THREE.Group();
-  pivot.position.x = data.orbitRadius;
+  // Initial position from true anomaly = orbitPhase.
+  const r0 = ellipseRadius(data.orbitRadius, data.orbitEccentricity, data.orbitPhase);
+  pivot.position.set(r0 * Math.cos(data.orbitPhase), 0, r0 * Math.sin(data.orbitPhase));
   group.add(pivot);
 
   const body = new THREE.Group();
@@ -126,40 +170,29 @@ export function makePlanet(data: PlanetData, segments = 48): PlanetHandle {
 
   const moons: MoonHandle[] = [];
   for (const m of data.moons) {
-    const mh = makeMoon(m, material);
+    const mh = makeMoon(m);
     moons.push(mh);
     body.add(mh.pivot);
-    body.add(buildMoonOrbit(m.orbitRadius, m.orbitTilt));
+    body.add(buildEllipseLine(m.orbitRadius, m.orbitEccentricity, m.orbitOmega, m.orbitTilt, 0.18, 96));
   }
 
-  // Set initial orbit angle
-  group.rotation.y = data.orbitPhase;
-
-  return { data, group, pivot, body, mesh, material, ring, moons };
+  return {
+    data,
+    group,
+    pivot,
+    body,
+    mesh,
+    material,
+    ring,
+    moons,
+    orbitAngle: data.orbitPhase,
+  };
 }
 
-function buildMoonOrbit(radius: number, tilt: number): THREE.Line {
-  const segs = 64;
-  const pts: number[] = [];
-  for (let i = 0; i <= segs; i++) {
-    const a = (i / segs) * Math.PI * 2;
-    pts.push(Math.cos(a) * radius, 0, Math.sin(a) * radius);
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  const mat = new THREE.LineBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.18,
-    depthWrite: false,
-  });
-  const line = new THREE.Line(geo, mat);
-  line.rotation.x = tilt;
-  return line;
-}
-
-function makeMoon(data: MoonData, _parentMat: THREE.ShaderMaterial): MoonHandle {
+function makeMoon(data: MoonData): MoonHandle {
   const pivot = new THREE.Group();
+  pivot.rotation.order = 'YXZ';
+  pivot.rotation.y = data.orbitOmega;
   pivot.rotation.x = data.orbitTilt;
 
   const geo = planetGeo(28);
@@ -175,12 +208,20 @@ function makeMoon(data: MoonData, _parentMat: THREE.ShaderMaterial): MoonHandle 
     },
   });
   const mesh = new THREE.Mesh(geo, material);
-  mesh.position.x = data.orbitRadius;
+  const r0 = ellipseRadius(data.orbitRadius, data.orbitEccentricity, data.orbitPhase);
+  mesh.position.set(r0 * Math.cos(data.orbitPhase), 0, r0 * Math.sin(data.orbitPhase));
   mesh.scale.setScalar(data.radius);
   mesh.userData = { kind: 'moon', moonId: data.id };
   pivot.add(mesh);
-  pivot.rotation.y = data.orbitPhase;
-  return { data, pivot, mesh, material };
+
+  return { data, pivot, mesh, material, orbitAngle: data.orbitPhase };
+}
+
+// Advance true anomaly with angular-momentum conservation: dν/dt = n * (a/r)².
+function advanceOrbit(angle: number, a: number, e: number, n: number, dt: number): number {
+  const r = ellipseRadius(a, e, angle);
+  const ratio = a / r;
+  return angle + n * ratio * ratio * dt;
 }
 
 export function updatePlanet(
@@ -190,12 +231,14 @@ export function updatePlanet(
   starColor: THREE.Color,
   cameraPos: THREE.Vector3,
 ): void {
-  // orbit + spin + animated shaders
-  h.group.rotation.y += h.data.orbitSpeed * dt;
-  h.body.rotation.y += h.data.rotationSpeed * dt;
+  const d = h.data;
+  h.orbitAngle = advanceOrbit(h.orbitAngle, d.orbitRadius, d.orbitEccentricity, d.orbitSpeed, dt);
+  const r = ellipseRadius(d.orbitRadius, d.orbitEccentricity, h.orbitAngle);
+  h.pivot.position.set(r * Math.cos(h.orbitAngle), 0, r * Math.sin(h.orbitAngle));
+
+  h.body.rotation.y += d.rotationSpeed * dt;
   h.material.uniforms.uTime.value += dt;
 
-  // light direction in world space (from planet to star)
   const planetPos = new THREE.Vector3();
   h.body.getWorldPosition(planetPos);
   const dir = starWorldPos.clone().sub(planetPos).normalize();
@@ -207,16 +250,17 @@ export function updatePlanet(
     rmat.uniforms.uLightDir.value.copy(dir);
   }
 
-  // moons: orbit + shader light
   const moonPos = new THREE.Vector3();
   for (const m of h.moons) {
-    m.pivot.rotation.y += m.data.orbitSpeed * dt;
+    const md = m.data;
+    m.orbitAngle = advanceOrbit(m.orbitAngle, md.orbitRadius, md.orbitEccentricity, md.orbitSpeed, dt);
+    const mr = ellipseRadius(md.orbitRadius, md.orbitEccentricity, m.orbitAngle);
+    m.mesh.position.set(mr * Math.cos(m.orbitAngle), 0, mr * Math.sin(m.orbitAngle));
     m.mesh.getWorldPosition(moonPos);
     const moonDir = starWorldPos.clone().sub(moonPos).normalize();
     m.material.uniforms.uLightDir.value.copy(moonDir);
     m.material.uniforms.uLightColor.value.copy(starColor);
   }
 
-  // suppress unused warnings (camera pos available for future LOD)
   void cameraPos;
 }

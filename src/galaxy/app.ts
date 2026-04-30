@@ -53,7 +53,7 @@ export class App {
 
     // Scene + camera
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(55, host.clientWidth / host.clientHeight, 0.05, 28000);
+    this.camera = new THREE.PerspectiveCamera(55, host.clientWidth / host.clientHeight, 0.05, 38000);
 
     // Subtle ambient (most lighting is in planet shader)
     const ambient = new THREE.AmbientLight(0xffffff, 0.05);
@@ -65,10 +65,10 @@ export class App {
 
     // Camera + controller
     this.controller = new CameraController(this.camera, this.canvas);
-    this.controller.setLimits(2400, 18000);
+    this.controller.setLimits(2400, 24000);
     this.controller.snap({
       target: new THREE.Vector3(0, 0, 0),
-      distance: 13000,
+      distance: 18000,
       yaw: 0.6,
       pitch: 0.95,
     });
@@ -133,14 +133,17 @@ export class App {
 
   private layerPreset(layer: LayerState): LayerCamPreset {
     if (layer.kind === 'galaxy') {
-      return { distance: 13000, pitch: 0.95, minDist: 2400, maxDist: 18000 };
+      return { distance: 18000, pitch: 0.95, minDist: 2400, maxDist: 24000 };
     }
     if (layer.kind === 'system') {
-      // Frame the whole system based on its outermost planet
+      // Frame the whole system based on the outermost planet's apoapsis.
       const sys = layer.systemId ? this.galaxy.systems.get(layer.systemId) : null;
       let outer = 60;
       if (sys && sys.data.planets.length > 0) {
-        for (const p of sys.data.planets) outer = Math.max(outer, p.orbitRadius);
+        for (const p of sys.data.planets) {
+          const apo = p.orbitRadius * (1 + p.orbitEccentricity);
+          outer = Math.max(outer, apo);
+        }
       }
       const dist = outer * 1.55 + 24;
       return { distance: dist, pitch: 0.55, minDist: 14, maxDist: dist * 4 };
@@ -189,8 +192,11 @@ export class App {
     // Activate system immediately so its planets render during the fly
     setActiveSystem(this.galaxy, next.systemId);
 
-    // Stop tracking during the transition
-    this.controller.trackedNode = null;
+    // Track the destination node from the start of the transition. The
+    // camera-controller refreshes the lerp endpoint each frame from the node's
+    // world position, so the camera chases the moving target smoothly and
+    // there's no snap when the transition completes.
+    this.controller.trackedNode = node;
 
     this.controller.goTo(
       {
@@ -201,7 +207,6 @@ export class App {
       },
       1.4,
       () => {
-        this.controller.trackedNode = node;
         this.controller.setLimits(preset.minDist, preset.maxDist);
       },
     );
@@ -259,8 +264,9 @@ export class App {
 
     this.controller.update(dt);
 
-    // Very slow galactic rotation around the central black hole
-    this.galaxy.root.rotation.y += dt * 0.003;
+    // Slow galactic rotation around the central black hole — perceptible
+    // (~10 min/revolution) without being distracting at the system scale.
+    this.galaxy.root.rotation.y += dt * 0.010;
 
     const camPos = this.camera.position;
     updateGalaxy(this.galaxy, dt, camPos, this.state.systemId);

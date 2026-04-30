@@ -3,7 +3,7 @@
 > **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 1 (galaxy map) complete + runtime strings migrated to English. Gameplay layer not started — will be built on top of the simulation in the next session.
+> **Status:** Wave 1 (galaxy map) complete + runtime strings migrated to English + Wave 1.5 polish (elliptical orbits with Kepler 2nd-law motion, extent-aware system packing with cluster bias, smooth chasing camera, 10000-unit disk). Gameplay layer not started — will be built on top of the simulation in the next session.
 
 ---
 

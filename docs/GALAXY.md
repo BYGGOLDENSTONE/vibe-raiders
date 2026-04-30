@@ -28,11 +28,11 @@ position, distance, yaw, pitch) and rebuilds the UI panel.
 
 ### LOD by layer
 
-| Layer  | Visible bodies                                 | Camera default                        |
-|--------|------------------------------------------------|---------------------------------------|
-| galaxy | All star cores + glows + black hole + skydome  | distance **13000**, pitch **0.95**    |
-| system | Active system's planets + moons + orbit lines  | dynamic — `outermostOrbit × 1.55 + 24`|
-| planet | Active system's planets (sibling planets visible) | `planetRadius × 4.5` (min 3.5)     |
+| Layer  | Visible bodies                                 | Camera default                                 |
+|--------|------------------------------------------------|------------------------------------------------|
+| galaxy | All star cores + glows + black hole + skydome  | distance **18000**, pitch **0.95**             |
+| system | Active system's planets + moons + orbit lines  | dynamic — `outerApoapsis × 1.55 + 24`          |
+| planet | Active system's planets (sibling planets visible) | `planetRadius × 4.5` (min 3.5)              |
 
 Implemented via `setSystemDetail(systemHandle, full)`:
 
@@ -48,9 +48,12 @@ Holds:
 
 - `target: Vector3`
 - `distance, yaw, pitch`
-- `trackedNode: Object3D | null` — when set, `target` follows the node
-  every frame **after a transition completes**, so the camera stays
-  locked on a planet that's orbiting its star.
+- `trackedNode: Object3D | null` — when set, the camera target follows the
+  node every frame. The transition itself also refreshes its destination
+  from the tracked node's live world position each frame, so the camera
+  smoothly chases a moving target (a planet orbiting its star, or a
+  system drifting with the galactic rotation) instead of snapping when
+  the lerp completes.
 
 Pointer input:
 
@@ -62,11 +65,11 @@ Distance limits (per layer):
 
 | Layer  | min        | max         |
 |--------|------------|-------------|
-| galaxy | 2400       | 18000       |
+| galaxy | 2400       | 24000       |
 | system | 14         | dynamic × 4 |
 | planet | radius × 1.6 | radius × 60 |
 
-Camera **far plane: 28000**, near plane: 0.05.
+Camera **far plane: 38000**, near plane: 0.05.
 
 ---
 
@@ -82,13 +85,25 @@ same galaxy.
 | System count     | **200** |
 | Spiral arms      | 4 |
 | Twist factor     | 3.6 |
-| Disk radius      | **7000** |
+| Disk radius      | **10000** |
 | Inner cutout     | **1500** (around the black hole) |
 | Disk thickness   | 120 (vertical Gaussian scatter) |
-| Min separation   | **280** between any two systems |
+| Min separation   | **`extent_a + extent_b + 140` buffer**, hard floor **600** |
 
-Placement is rejection sampling, up to `systemCount × 80` attempts.
-Distance follows a `pow(rand, 0.55)` bias toward outer regions.
+Placement is rejection sampling, up to `systemCount × 200` attempts. Two
+sampling modes interleave to prevent a Poisson-disk "grid" feel:
+
+- **Uniform spiral arm** (~45%): `pow(rand, 0.55)` radial bias along an
+  arm with Gaussian scatter — drives overall structure.
+- **Cluster bias** (~55% once ≥ 8 systems exist): jitter near a randomly
+  picked existing system, jitter radius `pow(rand, 1.7) × 2400` (close-
+  biased) — produces natural overdensities and voids.
+
+Each candidate is fully built (so its real outer reach is known), then
+checked against existing systems using
+`max(600, candExt + sExt + 140)` as the center-to-center minimum.
+`systemOuterExtent(s)` = max over planets of
+`a*(1+e) + max(planetRadius, ringOuter, moonOrbitMaxApo + moonRadius)`.
 
 ### Star classes
 
@@ -110,10 +125,24 @@ A system has **4–7 planets**. Zone allocation:
 - mid ~37%   → temperate: rocky / ocean / desert / toxic
 - outer ~30% → cold: gas / ice / rocky
 
-Orbit math:
+Orbit math: **elliptical, focus at the star**.
 
-- start: `star.maxRadius × 3.6`
-- step:  `range(5.0, 8.0)` per planet
+- Each planet has `a` (semi-major axis), `e` (eccentricity), `ω`
+  (argument of periapsis), small `tilt` of the orbit plane.
+- Eccentricity per type: gas giants `range(0.02, 0.10)` (their wide
+  moon system already adds visual width); other types `range(0.04, 0.22)`.
+- ω, tilt: `range(0, 2π)` and `range(-0.05, 0.05)` rad.
+- Orbit packing is sequential: stub each planet first (type, radius,
+  rings, full moon family) so we know its `bodyExtent` (worst-case reach
+  from planet center over rings + moon apoapsis), then pick a gap and
+  solve `a` so `a*(1−e) − bodyExtent > prevApoExtent + gap`. This
+  guarantees no neighbour orbit ever crosses, even with eccentric paths
+  and large gas giants.
+- Initial `prevApoExtent` = `starRadius × 2.8` to clear the star.
+- Gap is **bucketed** to break racetrack uniformity:
+  - 30% tight pair: `range(2.0, 4.0)`
+  - 45% normal:     `range(5.0, 9.0)`
+  - 25% wide:       `range(11.0, 18.0)`
 
 | Type   | Radius      | Resources                          |
 |--------|-------------|------------------------------------|
@@ -136,13 +165,21 @@ Each planet additionally carries:
 
 ### Moons
 
+Moons orbit the planet on their own ellipses, packed the same way as
+planets so their orbits never cross.
+
 | Parameter        | Value |
 |------------------|-------|
 | Radius           | parent planet × **0.15 – 0.45** |
-| Orbit radius     | parent × 2.6–4.4 + index × 1.2 × parent |
+| Eccentricity     | `range(0.0, 0.18)` (mostly circular) |
+| Argument of periapsis | `range(0, 2π)` |
 | Orbit speed      | `range(0.18, 0.42)` |
 | Orbit tilt       | `range(-0.25, 0.25)` rad |
-| Orbit line       | drawn per moon, opacity 0.18 |
+| Orbit line       | elliptical, drawn per moon, opacity 0.18 |
+
+Moon orbit packing: starts at `planetRadius × 1.4`, then per-moon gap is
+bucketed `40% close (0.30–0.70 × r)`, `45% normal (0.80–1.50 × r)`,
+`15% wide (1.70–2.50 × r)`, with `a = (prevApoExt + gap + radius) / (1 − e)`.
 
 ### System economy
 
@@ -178,14 +215,32 @@ Moons: `<planet> a/b/c/…`.
 
 | Body                            | Speed                                                          |
 |---------------------------------|----------------------------------------------------------------|
-| Galaxy root rotation            | `+0.003 rad/sec` (≈35-min full revolution)                     |
-| Planet orbit around star        | `range(0.06, 0.16) / sqrt(orbitRadius/8)` — Kepler-ish slowdown|
+| Galaxy root rotation            | `+0.010 rad/sec` (≈10-min full revolution)                     |
+| Planet orbit around star        | base `range(0.06, 0.16) / sqrt(a/8)`, then **angular-momentum-conserving** scaling each frame |
 | Planet axial spin               | `range(0.02, 0.08)`, 80% prograde / 20% retrograde             |
-| Moon orbit around planet        | `range(0.18, 0.42)`                                            |
+| Moon orbit around planet        | base `range(0.18, 0.42)`, same Kepler 2nd-law scaling          |
 | Accretion disk                  | shader-driven via `uTime`; faster inside, slower outside       |
 | Black hole halo + star glow     | billboard `lookAt(camera)` every frame; no own rotation        |
 
 `dt` is clamped to `0.05` per frame to prevent giant time-steps after tab switch.
+
+### Elliptical orbit motion (`planet.ts`)
+
+Each planet/moon stores a live `orbitAngle` (true anomaly ν) initialized
+from `orbitPhase`. Each frame:
+
+```
+r  = a (1 − e²) / (1 + e cos ν)
+dν = baseSpeed · (a/r)² · dt        // Kepler's 2nd law (constant L)
+ν += dν
+pivot.position = (r cos ν, 0, r sin ν)   // focus at origin
+```
+
+The orbit's `ω` and `tilt` are baked into the parent group as
+`rotation.y` and `rotation.x` (rotation order `'YXZ'`), so the focus-
+frame position above lands on the correctly oriented ellipse without
+extra math. The orbit line is the same ellipse drawn parametrically with
+the eccentric anomaly: `(a cos E − ae, 0, b sin E)` where `b = a√(1−e²)`.
 
 ---
 
@@ -359,17 +414,24 @@ If you're tweaking the feel:
 
 | Knob                                   | Where                                  | Current |
 |----------------------------------------|----------------------------------------|---------|
-| Galaxy disk radius                     | `generation.ts → generateGalaxy.radius`| 7000    |
+| Galaxy disk radius                     | `generation.ts → generateGalaxy.radius`| 10000   |
 | Inner cutout (around black hole)       | `generation.ts → generateGalaxy.innerRadius` | 1500 |
 | System count                           | `generateGalaxy(seed, systemCount)` default | 200 |
-| Min system separation                  | `generation.ts → minDistance`          | 280     |
+| Min system separation                  | `generation.ts → generateGalaxy`       | extent-aware, floor 600, +140 buffer |
+| Cluster bias chance                    | `generation.ts → generateGalaxy`       | 55% once ≥ 8 systems |
+| Cluster jitter radius                  | `generation.ts → generateGalaxy`       | `pow(rand, 1.7) × 2400` |
 | Black hole disk inner / outer          | `blackhole.ts → makeBlackHole`         | 160 / 900 |
 | Star radius range (any class)          | `generation.ts → STAR_PRESETS`         | 3.0 – 14.0 |
-| Planet radius range (any type)         | `generation.ts → makePlanet.radius`    | 0.4 – 2.6 |
-| Moon radius ratio                      | `generation.ts → makeMoon.radius`      | 0.15 – 0.45 |
-| Galaxy default camera distance         | `app.ts → layerPreset('galaxy')`       | 13000   |
-| Camera far plane                       | `app.ts → PerspectiveCamera`           | 28000   |
+| Planet radius range (any type)         | `generation.ts → buildPlanetStub`      | 0.4 – 2.6 |
+| Planet eccentricity (gas / other)      | `generation.ts → buildPlanetStub`      | 0.02–0.10 / 0.04–0.22 |
+| Planet gap buckets (tight/normal/wide) | `generation.ts → pickPlanetGap`        | 30%/45%/25% : 2–4 / 5–9 / 11–18 |
+| Moon radius ratio                      | `generation.ts → makeMoonsPacked`      | 0.15 – 0.45 |
+| Moon eccentricity                      | `generation.ts → makeMoonsPacked`      | 0.0 – 0.18 |
+| Moon gap buckets (close/normal/wide)   | `generation.ts → pickMoonGap`          | 40%/45%/15% : 0.3–0.7 / 0.8–1.5 / 1.7–2.5 (× planet radius) |
+| Galaxy default camera distance         | `app.ts → layerPreset('galaxy')`       | 18000   |
+| Galaxy max camera distance             | `app.ts → layerPreset('galaxy')`       | 24000   |
+| Camera far plane                       | `app.ts → PerspectiveCamera`           | 38000   |
 | Skydome radius                         | `starfield.ts`                         | 24000   |
-| Galaxy rotation rate                   | `app.ts → loop`                        | 0.003 rad/sec |
+| Galaxy rotation rate                   | `app.ts → loop`                        | 0.010 rad/sec |
 | Visible system labels in galaxy view   | `labels.ts → update`                   | 18      |
 | Cinematic transition duration          | `app.ts → navigateTo`                  | 1.4 sec |

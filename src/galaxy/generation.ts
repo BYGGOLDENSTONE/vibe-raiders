@@ -183,35 +183,79 @@ function riskFor(p: { type: PlanetType; temperatureC: number }): RiskLevel {
 
 // --- Generators -------------------------------------------------------------
 
-function makeMoon(rng: Rng, planetRadius: number, planetName: string, idx: number): MoonData {
-  // Wide variation: tiny captured asteroid -> big companion moon (always < parent planet)
-  const radius = planetRadius * rng.range(0.15, 0.45);
-  const orbitRadius = planetRadius * rng.range(2.6, 4.4) + idx * planetRadius * 1.2;
-  const tint = rng.range(0.55, 0.85);
-  return {
-    id: `m${idx}`,
-    name: makeMoonName(planetName, idx),
-    radius,
-    orbitRadius,
-    orbitSpeed: rng.range(0.18, 0.42),
-    orbitPhase: rng.range(0, Math.PI * 2),
-    orbitTilt: rng.range(-0.25, 0.25),
-    color: [tint, tint * rng.range(0.9, 1.0), tint * rng.range(0.85, 0.95)],
-  };
+function pickMoonGap(rng: Rng, planetRadius: number): number {
+  // Bucketed: 40% close pair, 45% normal, 15% wide — kills "racing-track"
+  // uniformity but keeps moon systems tight enough to leave breathing room
+  // between planet orbits.
+  const r = rng.next();
+  if (r < 0.40) return planetRadius * rng.range(0.30, 0.70);
+  if (r < 0.85) return planetRadius * rng.range(0.80, 1.50);
+  return planetRadius * rng.range(1.70, 2.50);
 }
 
-function makePlanet(
+function makeMoonsPacked(rng: Rng, planetRadius: number, planetName: string, count: number): MoonData[] {
+  const moons: MoonData[] = [];
+  // Start above planet surface with breathing room.
+  let prevApoExt = planetRadius * 1.4;
+  for (let i = 0; i < count; i++) {
+    const radius = planetRadius * rng.range(0.15, 0.45);
+    // Moons are usually quite circular; small but non-zero eccentricity for variation.
+    const eccentricity = rng.range(0.0, 0.18);
+    const omega = rng.range(0, Math.PI * 2);
+    const gap = pickMoonGap(rng, planetRadius);
+    // periapsis = a*(1-e); we need (a*(1-e) - radius) > prevApoExt + gap
+    const a = (prevApoExt + gap + radius) / Math.max(0.001, 1 - eccentricity);
+    prevApoExt = a * (1 + eccentricity) + radius;
+
+    const tint = rng.range(0.55, 0.85);
+    moons.push({
+      id: `m${i}`,
+      name: makeMoonName(planetName, i),
+      radius,
+      orbitRadius: a,
+      orbitEccentricity: eccentricity,
+      orbitOmega: omega,
+      orbitSpeed: rng.range(0.18, 0.42),
+      orbitPhase: rng.range(0, Math.PI * 2),
+      orbitTilt: rng.range(-0.25, 0.25),
+      color: [tint, tint * rng.range(0.9, 1.0), tint * rng.range(0.85, 0.95)],
+    });
+  }
+  return moons;
+}
+
+interface PlanetStub {
+  type: PlanetType;
+  radius: number;
+  name: string;
+  zone: 'inner' | 'mid' | 'outer';
+  moons: MoonData[];
+  hasRings: boolean;
+  ringInner: number;
+  ringOuter: number;
+  ringTint: number;
+  eccentricity: number;
+  omega: number;
+  orbitTilt: number;
+  bodyExtent: number; // worst-case radial reach from planet center (rings, moons inclusive)
+}
+
+function pickPlanetGap(rng: Rng): number {
+  // Bucketed: 30% tight pair, 45% normal, 25% wide. Gives systems clear visual rhythm.
+  const r = rng.next();
+  if (r < 0.30) return rng.range(2.0, 4.0);
+  if (r < 0.75) return rng.range(5.0, 9.0);
+  return rng.range(11.0, 18.0);
+}
+
+function buildPlanetStub(
   rng: Rng,
   systemName: string,
   index: number,
-  orbitRadius: number,
   zone: 'inner' | 'mid' | 'outer',
   isRomanticSystem: boolean,
-): PlanetData {
+): PlanetStub {
   const type: PlanetType = rng.pick(PLANET_TYPES_BY_ZONE[zone]);
-  const palette = PLANET_PALETTES[type];
-
-  // Big variation but clamped under star sizes — star min 3.0 > planet max ~2.6
   const radius =
     type === 'gas'   ? rng.range(1.6, 2.6) :
     type === 'ocean' ? rng.range(0.8, 1.6) :
@@ -219,18 +263,46 @@ function makePlanet(
     rng.range(0.4, 1.2);
 
   const name = makePlanetName(rng, systemName, index, isRomanticSystem);
+
   const moonCount = type === 'gas' ? rng.int(1, 3) : rng.bool(0.55) ? rng.int(1, 2) : 0;
-  const moons: MoonData[] = [];
-  for (let i = 0; i < moonCount; i++) moons.push(makeMoon(rng, radius, name, i));
+  const moons = makeMoonsPacked(rng, radius, name, moonCount);
 
   const hasRings = type === 'gas' && rng.bool(0.55);
-  const ringInner = radius * rng.range(1.4, 1.7);
-  const ringOuter = ringInner + radius * rng.range(0.6, 1.2);
+  const ringInner = hasRings ? radius * rng.range(1.4, 1.7) : 0;
+  const ringOuter = hasRings ? ringInner + radius * rng.range(0.6, 1.2) : 0;
   const ringTint = rng.range(0.6, 0.95);
 
+  // Gas giants get tighter eccentricity (their wide moon system already adds visual width).
+  const eccentricity =
+    type === 'gas' ? rng.range(0.02, 0.10) :
+    rng.range(0.04, 0.22);
+  const omega = rng.range(0, Math.PI * 2);
+  const orbitTilt = rng.range(-0.05, 0.05);
+
+  let moonExtent = 0;
+  for (const m of moons) {
+    moonExtent = Math.max(moonExtent, m.orbitRadius * (1 + m.orbitEccentricity) + m.radius);
+  }
+  const bodyExtent = Math.max(radius, ringOuter, moonExtent);
+
+  return {
+    type, radius, name, zone, moons,
+    hasRings, ringInner, ringOuter, ringTint,
+    eccentricity, omega, orbitTilt, bodyExtent,
+  };
+}
+
+function finalizePlanet(
+  rng: Rng,
+  stub: PlanetStub,
+  index: number,
+  semiMajor: number,
+): PlanetData {
+  const palette = PLANET_PALETTES[stub.type];
+
   const baseTemp =
-    zone === 'inner' ? rng.range(150, 600) :
-    zone === 'mid'   ? rng.range(-40, 60)   :
+    stub.zone === 'inner' ? rng.range(150, 600) :
+    stub.zone === 'mid'   ? rng.range(-40, 60)   :
     rng.range(-200, -60);
 
   const jitter = (c: [number, number, number]): [number, number, number] => [
@@ -240,31 +312,33 @@ function makePlanet(
   ];
 
   const temperatureC = Math.round(baseTemp);
-  const resource = rng.pick(RESOURCES_BY_TYPE[type]);
-  const risk = riskFor({ type, temperatureC });
-  const description = rng.pick(PLANET_DESC_TEMPLATES[type]);
+  const resource = rng.pick(RESOURCES_BY_TYPE[stub.type]);
+  const risk = riskFor({ type: stub.type, temperatureC });
+  const description = rng.pick(PLANET_DESC_TEMPLATES[stub.type]);
 
   return {
     id: `p${index}`,
-    name,
-    type,
-    radius,
-    orbitRadius,
-    orbitSpeed: rng.range(0.06, 0.16) / Math.sqrt(orbitRadius / 8),
+    name: stub.name,
+    type: stub.type,
+    radius: stub.radius,
+    orbitRadius: semiMajor,
+    orbitEccentricity: stub.eccentricity,
+    orbitOmega: stub.omega,
+    orbitSpeed: rng.range(0.06, 0.16) / Math.sqrt(semiMajor / 8),
     orbitPhase: rng.range(0, Math.PI * 2),
-    orbitTilt: rng.range(-0.05, 0.05),
+    orbitTilt: stub.orbitTilt,
     axialTilt: rng.range(-0.45, 0.45),
     rotationSpeed: rng.range(0.02, 0.08) * (rng.bool(0.8) ? 1 : -1),
     temperatureC,
-    hasRings,
-    ringInner,
-    ringOuter,
-    ringColor: [ringTint, ringTint * 0.92, ringTint * 0.78],
+    hasRings: stub.hasRings,
+    ringInner: stub.ringInner,
+    ringOuter: stub.ringOuter,
+    ringColor: [stub.ringTint, stub.ringTint * 0.92, stub.ringTint * 0.78],
     primaryColor: jitter(palette.primary),
     secondaryColor: jitter(palette.secondary),
     accentColor: jitter(palette.accent),
     noiseSeed: rng.range(0, 1000),
-    moons,
+    moons: stub.moons,
     resource,
     risk,
     description,
@@ -276,19 +350,32 @@ function makeSystem(rng: Rng, position: [number, number, number]): SystemData {
     'red-dwarf', 'red-dwarf', 'orange', 'orange', 'yellow', 'yellow', 'white-blue', 'blue-giant',
   ]);
   const preset = STAR_PRESETS[starClass];
+  const starRadius = rng.range(preset.radius[0], preset.radius[1]);
   const name = makeSystemName(rng);
   const isRomantic = !name.includes('-') || /[A-Z][a-z]/.test(name.split('-')[0] ?? '');
 
   const planetCount = rng.int(4, 7);
-  const planets: PlanetData[] = [];
-  let prevOrbit = preset.radius[1] * 3.6;
+
+  // Stage 1: pre-compute every planet's properties except final orbit a.
+  const stubs: PlanetStub[] = [];
   for (let i = 0; i < planetCount; i++) {
-    const orbit = prevOrbit + rng.range(5.0, 8.0);
     const zone: 'inner' | 'mid' | 'outer' =
       i < planetCount * 0.33 ? 'inner' :
-      i < planetCount * 0.7 ? 'mid' : 'outer';
-    planets.push(makePlanet(rng, name, i, orbit, zone, isRomantic));
-    prevOrbit = orbit;
+      i < planetCount * 0.7  ? 'mid' : 'outer';
+    stubs.push(buildPlanetStub(rng, name, i, zone, isRomantic));
+  }
+
+  // Stage 2: pack orbits sequentially. periapsis(i+1) - extent(i+1) > apoapsis(i) + extent(i) + gap.
+  const planets: PlanetData[] = [];
+  // First planet starts a comfortable distance off the star.
+  let prevApoExt = starRadius * 2.8;
+  for (let i = 0; i < planetCount; i++) {
+    const stub = stubs[i];
+    const gap = pickPlanetGap(rng);
+    const requiredPeriInner = prevApoExt + gap; // inner edge of this planet's path must clear here
+    const a = (requiredPeriInner + stub.bodyExtent) / Math.max(0.001, 1 - stub.eccentricity);
+    planets.push(finalizePlanet(rng, stub, i, a));
+    prevApoExt = a * (1 + stub.eccentricity) + stub.bodyExtent;
   }
 
   const economy = pickEconomy(rng, planets);
@@ -299,12 +386,27 @@ function makeSystem(rng: Rng, position: [number, number, number]): SystemData {
     name,
     starClass,
     starColor: preset.color,
-    starRadius: rng.range(preset.radius[0], preset.radius[1]),
+    starRadius,
     position,
     planets,
     economy,
     description,
   };
+}
+
+// Worst-case radial reach of a system — outermost planet apoapsis plus its
+// own body extent (rings, moon system).
+function systemOuterExtent(s: SystemData): number {
+  let max = s.starRadius * 4.0;
+  for (const p of s.planets) {
+    let planetReach = Math.max(p.radius, p.ringOuter);
+    for (const m of p.moons) {
+      planetReach = Math.max(planetReach, m.orbitRadius * (1 + m.orbitEccentricity) + m.radius);
+    }
+    const apo = p.orbitRadius * (1 + p.orbitEccentricity);
+    max = Math.max(max, apo + planetReach);
+  }
+  return max;
 }
 
 // Spiral arm placement
@@ -313,37 +415,75 @@ export function generateGalaxy(seed: number, systemCount = 200): GalaxyData {
   const arms = 4;
   const armSpread = 0.55;
   const twist = 3.6;
-  const radius = 7000;
+  const radius = 10000;
   const thickness = 120;
   const innerRadius = 1500; // outside the supermassive black hole, with breathing room
 
   const systems: SystemData[] = [];
-  const minDistance = 280;
+  const extents: number[] = [];
+
+  // Hard floor for any pair regardless of how small both systems are. The
+  // real exclusion radius is `extent_a + extent_b + buffer`, which scales up
+  // for bigger systems with eccentric orbits and wide moon families.
+  const minSeparation = 600;
+  const buffer = 140;
 
   let attempts = 0;
-  while (systems.length < systemCount && attempts < systemCount * 80) {
+  const maxAttempts = systemCount * 200;
+  while (systems.length < systemCount && attempts < maxAttempts) {
     attempts++;
-    const arm = rng.int(0, arms - 1);
-    const t = Math.pow(rng.next(), 0.55);
-    const armOffset = (arm * Math.PI * 2) / arms;
-    const angle = armOffset + t * twist + rng.gauss() * armSpread * (1 - t * 0.4);
-    const r = innerRadius + t * (radius - innerRadius);
-    const x = Math.cos(angle) * r;
-    const z = Math.sin(angle) * r;
-    const y = rng.gauss() * thickness * (1 - t * 0.5);
+
+    // Two sampling modes:
+    //   - uniform spiral-arm sampling (default)
+    //   - cluster bias: drop near a random existing system, creating
+    //     overdensities and natural voids instead of an even Poisson grid.
+    let x: number;
+    let z: number;
+    let y: number;
+
+    if (systems.length > 8 && rng.bool(0.55)) {
+      const seed = rng.pick(systems);
+      // Power-law biased radius (exp > 1 = bias toward small): lots of close
+      // neighbours forming a tight clump, occasional outliers at the edge.
+      const jitterR = Math.pow(rng.next(), 1.7) * 2400;
+      const jitterAngle = rng.range(0, Math.PI * 2);
+      x = seed.position[0] + Math.cos(jitterAngle) * jitterR;
+      z = seed.position[2] + Math.sin(jitterAngle) * jitterR;
+      y = seed.position[1] + rng.gauss() * thickness * 0.6;
+      const rr = Math.sqrt(x * x + z * z);
+      if (rr < innerRadius || rr > radius) continue;
+    } else {
+      const arm = rng.int(0, arms - 1);
+      const t = Math.pow(rng.next(), 0.55);
+      const armOffset = (arm * Math.PI * 2) / arms;
+      const angle = armOffset + t * twist + rng.gauss() * armSpread * (1 - t * 0.4);
+      const r = innerRadius + t * (radius - innerRadius);
+      x = Math.cos(angle) * r;
+      z = Math.sin(angle) * r;
+      y = rng.gauss() * thickness * (1 - t * 0.5);
+    }
+
+    // Build the candidate system first so we know its actual outer reach
+    // before deciding whether it fits.
+    const candidate = makeSystem(rng, [x, y, z]);
+    const candExt = systemOuterExtent(candidate);
 
     let tooClose = false;
-    for (const s of systems) {
+    for (let i = 0; i < systems.length; i++) {
+      const s = systems[i]!;
+      const sExt = extents[i]!;
+      const minD = Math.max(minSeparation, candExt + sExt + buffer);
       const dx = s.position[0] - x;
       const dz = s.position[2] - z;
-      if (dx * dx + dz * dz < minDistance * minDistance) {
+      if (dx * dx + dz * dz < minD * minD) {
         tooClose = true;
         break;
       }
     }
     if (tooClose) continue;
 
-    systems.push(makeSystem(rng, [x, y, z]));
+    systems.push(candidate);
+    extents.push(candExt);
   }
 
   return { systems, radius };
