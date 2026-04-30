@@ -17,18 +17,30 @@ interface Label {
   baseText: string;  // unprefixed name, kept so home markers can re-render cleanly
 }
 
+export interface RemoteOwner {
+  name: string;
+  color: string;
+}
+
 export interface HomeMarkerOpts {
   homePlanetId: string;
   homeSystemId: string;
   ownedPlanets: Set<string>;
   homeSystemFullyClaimed: boolean;
-  // W5: planets in the home system that are still claimable via System
-  // Expansion. Get an "+ ANNEX" prefix so the player sees where to click.
-  claimablePlanets: Set<string>;
+  // W6-E: the single planet that the next-annex button currently targets.
+  // Empty string when no annex is queued (no unlock yet, or system fully
+  // claimed). Replaces the W5 multi-planet claimable pulse — only one
+  // planet pulses at a time so the player has an obvious next step.
+  nextAnnexPlanetId: string;
   // W4-E: planetId whose moons are awaiting outpost selection (single planet
   // — the player's home — for now). Empty string disables the marker.
   awaitingMoonChoiceForPlanet: string;
   outpostMoonId: string | null;
+  // W6-F: planets and systems claimed by other players in the relay. Each
+  // entry tints its label and prefixes the owner's name so the local player
+  // can tell at a glance who owns what.
+  remotePlanetOwners: Map<string, RemoteOwner>;
+  remoteSystemOwners: Map<string, RemoteOwner>;
 }
 
 function tempVec(): THREE.Vector3 { return new THREE.Vector3(); }
@@ -146,17 +158,29 @@ export class LabelManager {
         | 'claimable-planet'
         | 'outpost-moon-active'
         | 'outpost-moon-pending'
+        | 'remote-planet'
+        | 'remote-system'
         | null;
       let kind: Kind = null;
+      let remoteOwner: RemoteOwner | null = null;
 
       if (l.kind === 'planet' && l.planetId === opts.homePlanetId && opts.homePlanetId) {
         kind = 'home-planet';
       } else if (l.kind === 'planet' && l.planetId && opts.ownedPlanets.has(l.planetId)) {
         kind = 'owned-planet';
-      } else if (l.kind === 'planet' && l.planetId && opts.claimablePlanets.has(l.planetId)) {
+      } else if (
+        l.kind === 'planet' && l.planetId &&
+        l.planetId === opts.nextAnnexPlanetId && opts.nextAnnexPlanetId
+      ) {
         kind = 'claimable-planet';
+      } else if (l.kind === 'planet' && l.planetId && opts.remotePlanetOwners.has(l.planetId)) {
+        kind = 'remote-planet';
+        remoteOwner = opts.remotePlanetOwners.get(l.planetId) ?? null;
       } else if (l.kind === 'system' && l.systemId === opts.homeSystemId && opts.homeSystemId) {
         kind = opts.homeSystemFullyClaimed ? 'home-system-full' : 'home-system-partial';
+      } else if (l.kind === 'system' && l.systemId && opts.remoteSystemOwners.has(l.systemId)) {
+        kind = 'remote-system';
+        remoteOwner = opts.remoteSystemOwners.get(l.systemId) ?? null;
       } else if (
         l.kind === 'moon' &&
         l.planetId === opts.awaitingMoonChoiceForPlanet &&
@@ -176,9 +200,18 @@ export class LabelManager {
         case 'claimable-planet':    prefix = '✦ ANNEX · '; break;
         case 'outpost-moon-pending':prefix = '◌ pick · '; break;
         case 'outpost-moon-active': prefix = '◐ outpost · '; break;
+        case 'remote-planet':
+        case 'remote-system':
+          prefix = remoteOwner ? `◆ ${remoteOwner.name} · ` : '';
+          break;
       }
       l.textEl.textContent = prefix + l.baseText;
       l.el.dataset.home = kind ?? '';
+      if (remoteOwner) {
+        l.el.style.setProperty('--remote-color', remoteOwner.color);
+      } else {
+        l.el.style.removeProperty('--remote-color');
+      }
     }
   }
 

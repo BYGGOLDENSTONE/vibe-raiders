@@ -9,8 +9,13 @@ import { UI } from './ui';
 import { Empire } from '../empire/empire';
 import { ResourceHUD } from '../empire/hud';
 import { UpgradePanel } from '../empire/panel';
-import { DebugPanel } from '../empire/debug';
 import { RESOURCE_COLOR, RESOURCE_KEYS, RESOURCE_LABEL, type ResourceBag, type ResourceKey } from '../empire/types';
+import type { SessionConfig } from '../multiplayer/profile';
+import { goToVibeJamHub } from '../portal';
+import { MultiplayerClient, type ConnectionStatus } from '../multiplayer/client';
+import type { PublicEmpireState } from '../multiplayer/protocol';
+import { Leaderboard } from '../multiplayer/leaderboard';
+import type { RemoteOwner } from './labels';
 import { makeSurface, updateSurface, disposeSurface, surfaceConfig, type SurfaceHandle } from '../empire/surface';
 import {
   makeMoonOutpost,
@@ -59,8 +64,15 @@ export class App {
   private suppressPickClick = false;
   private pickDownX = 0;
   private pickDownY = 0;
+  private session: SessionConfig;
+  private mpClient: MultiplayerClient | null = null;
+  private mpBanner: HTMLDivElement | null = null;
+  private mpSpawnReady = false;
+  private mpLeaderboard: Leaderboard | null = null;
+  private portalHint: HTMLDivElement | null = null;
 
-  constructor(host: HTMLDivElement) {
+  constructor(host: HTMLDivElement, session: SessionConfig) {
+    this.session = session;
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -92,7 +104,9 @@ export class App {
     this.galaxy = buildGalaxy(this.scene, data);
 
     // Empire (gameplay state) — selects/loads home planet, starts the tick.
-    this.empire = new Empire(data, GALAXY_SEED);
+    // Mode flag drives the save-slot split so solo and multiplayer empires
+    // don't trample each other's progress.
+    this.empire = new Empire(data, GALAXY_SEED, this.session.mode);
 
     // Camera + controller — start framed on the player's homeworld so first-
     // time players land in their empire instead of staring at the galaxy from
@@ -126,6 +140,16 @@ export class App {
     // Picker
     this.picker = new Picker(this.camera);
 
+    // W6-H — galaxy-view-only hint pointing at the black hole. Hidden in
+    // system/planet views since the proxy is only pickable from galaxy view.
+    this.portalHint = document.createElement('div');
+    this.portalHint.className = 'gx-portal-hint';
+    this.portalHint.innerHTML =
+      '<span class="gx-portal-hint-ico">🌀</span>'
+      + '<span><strong>Vibe Jam Portal</strong> · click the central black hole to travel to the next game</span>';
+    this.overlay.appendChild(this.portalHint);
+    this.updatePortalHint();
+
     // UI
     this.ui = new UI(this.overlay, this.galaxy, (next) => this.navigateTo(next));
     this.ui.setEmpireContext(this.buildEmpireCtx());
@@ -136,7 +160,6 @@ export class App {
     // owns the launcher button.
     this.upgradePanel = new UpgradePanel(this.overlay, this.empire);
     this.hud = new ResourceHUD(this.overlay, this.empire, this.upgradePanel);
-    new DebugPanel(this.overlay, this.empire);
     this.empire.subscribe(() => {
       this.upgradePanel.refresh();
       this.hud.refresh();
@@ -144,9 +167,16 @@ export class App {
       this.rebuildMoonOutpostIfNeeded();
       this.refreshHomeMarkers();
       this.ui.render(this.state);
+      this.publishMp();
     });
     this.rebuildSurfaceIfNeeded();
     this.rebuildMoonOutpostIfNeeded();
+
+    // W6-D — multiplayer wiring. Solo mode skips this entirely so the relay
+    // is only opened when the player actually wants to share a galaxy.
+    if (this.session.mode === 'mp') {
+      this.setupMultiplayer();
+    }
 
     // Label clicks (delegated)
     this.labelLayer.addEventListener('click', (e) => {
@@ -297,12 +327,26 @@ export class App {
 
     this.state = next;
     this.ui.render(this.state);
+    this.updatePortalHint();
+  }
+
+  private updatePortalHint(): void {
+    if (!this.portalHint) return;
+    this.portalHint.style.display = this.state.kind === 'galaxy' ? '' : 'none';
   }
 
   private handlePick(clientX: number, clientY: number): void {
     const rect = this.canvas.getBoundingClientRect();
     const hit = this.picker.pickAt(clientX, clientY, rect, this.galaxy, this.state);
     if (!hit) return;
+
+    // W6-H — clicking the central black hole jumps the player to the next
+    // game in the Vibe Jam webring. Profile (name + colour) goes along with
+    // them so the receiving game can render a coherent identity.
+    if (hit.kind === 'portal') {
+      goToVibeJamHub(this.session.profile);
+      return;
+    }
 
     if (this.state.kind === 'galaxy' && hit.kind === 'star') {
       this.navigateTo({ kind: 'system', systemId: hit.systemId, planetId: null });
@@ -338,21 +382,25 @@ export class App {
     const homePlanetId = st.homeClaimed ? st.homePlanetId : '';
     const fullClaimed = st.homeClaimed && this.empire.isHomeSystemFullyClaimed();
 
-    // W5 — claimable planets light up once `system-expansion` is unlocked,
-    // until every home-system planet is owned.
-    const claimable = this.empire.claimableHomeSystemPlanets();
-    const claimablePlanets = new Set(claimable.map((p) => p.id));
+    // W6-E — only the next-annex target pulses, so the player always knows
+    // which planet they're about to claim before pressing the banner button.
+    const next = this.empire.nextAnnexTarget();
+    const nextAnnexPlanetId = next?.id ?? '';
 
     const awaitingMoon = this.empire.needsOutpostMoonChoice() ? homePlanetId : '';
+
+    const { remotePlanets, remoteSystems } = this.buildRemoteOwners();
 
     this.labels.markHome({
       homePlanetId,
       homeSystemId,
       ownedPlanets: new Set(st.ownedPlanets),
       homeSystemFullyClaimed: fullClaimed,
-      claimablePlanets,
+      nextAnnexPlanetId,
       awaitingMoonChoiceForPlanet: awaitingMoon,
       outpostMoonId: st.outpostMoonId,
+      remotePlanetOwners: remotePlanets,
+      remoteSystemOwners: remoteSystems,
     });
     this.ui.setHomeContext({
       systemId: homeSystemId || null,
@@ -362,37 +410,37 @@ export class App {
     this.ui.setEmpireContext(this.buildEmpireCtx());
   }
 
-  // EmpireCtx wires UI hooks (banner, panel buttons) to the empire layer
-  // without leaking empire types into galaxy/*. Rebuilt on every emit so the
-  // ctx always sees fresh state (canClaimPlanet returns false once owned, etc).
+  // EmpireCtx wires UI hooks (banner) to the empire layer without leaking
+  // empire types into galaxy/*. Rebuilt on every emit so the ctx always sees
+  // fresh state (next-target shifts, costs grow, etc).
   private buildEmpireCtx() {
-    const findPlanet = (planetId: string) => {
-      for (const s of this.galaxy.data.systems) {
-        for (const p of s.planets) {
-          if (p.id === planetId) return p;
-        }
-      }
-      return null;
-    };
-    const claimable = this.empire.claimableHomeSystemPlanets();
+    const target = this.empire.nextAnnexTarget();
+    const cost = this.empire.nextAnnexCost();
+    const haveBag = this.empire.state.resources;
+    let nextAnnex: { planetName: string; canAfford: boolean; costHtml: string } | null = null;
+    if (target && cost) {
+      const canAfford = canAffordCost(cost, haveBag);
+      nextAnnex = {
+        planetName: target.name,
+        canAfford,
+        costHtml: formatCostPills(cost, haveBag),
+      };
+    }
     return {
       needsMoonChoice: this.empire.needsOutpostMoonChoice(),
-      hasClaimablePlanets: claimable.length > 0,
-      canClaimPlanet: (planetId: string) => {
-        const p = findPlanet(planetId);
-        return !!p && this.empire.canClaimSystemPlanet(p);
-      },
-      claimPlanetCostHtml: (planetId: string) => {
-        const p = findPlanet(planetId);
-        if (!p) return '';
-        return formatCostPills(this.empire.systemPlanetClaimCost(p), this.empire.state.resources);
-      },
-      claimPlanet: (planetId: string) => {
-        if (this.empire.claimSystemPlanet(planetId)) {
+      nextAnnex,
+      claimNextAnnex: () => {
+        const before = this.empire.nextAnnexTarget();
+        if (!before) return;
+        if (this.empire.claimNextAnnex()) {
           // Camera-drift to the freshly claimed planet so the player sees
-          // their new asset spin into the rotation.
-          const sysId = this.empire.state.homeSystemId;
-          this.navigateTo({ kind: 'planet', systemId: sysId, planetId });
+          // their new asset spin into the rotation. Use the captured target
+          // since the next call will return a different planet.
+          this.navigateTo({
+            kind: 'planet',
+            systemId: this.empire.state.homeSystemId,
+            planetId: before.id,
+          });
         }
       },
     };
@@ -472,6 +520,135 @@ export class App {
     this.moonOutpostMoonId = cfg.moonId;
   }
 
+  // Build the planet/system → owner maps used by labels + leaderboard. Returns
+  // empty maps when no relay is wired up (solo mode), so the rest of the
+  // pipeline works the same way regardless of mode.
+  private buildRemoteOwners(): {
+    remotePlanets: Map<string, RemoteOwner>;
+    remoteSystems: Map<string, RemoteOwner>;
+  } {
+    const remotePlanets = new Map<string, RemoteOwner>();
+    const remoteSystems = new Map<string, RemoteOwner>();
+    if (!this.mpClient) return { remotePlanets, remoteSystems };
+    for (const p of this.mpClient.remotePlayers()) {
+      const owner: RemoteOwner = { name: p.profile.name, color: p.profile.color };
+      if (p.state.systemId) remoteSystems.set(p.state.systemId, owner);
+      for (const planetId of p.state.ownedPlanets) {
+        remotePlanets.set(planetId, owner);
+      }
+    }
+    return { remotePlanets, remoteSystems };
+  }
+
+  // ---- W6-D: Multiplayer ---------------------------------------------------
+
+  // Open the relay connection, build a preferred-systems list (existing home
+  // first, then galaxy order), and ask the server to assign a spawn system.
+  // The empire stays dormant until handleSpawnAssigned fires, so the player
+  // sees a "Connecting…" banner instead of a blank/black galaxy.
+  private setupMultiplayer(): void {
+    const host = (import.meta.env.VITE_PARTYKIT_HOST as string | undefined)
+      ?? 'localhost:1999';
+    this.mpBanner = this.makeMpBanner();
+    this.mpClient = new MultiplayerClient(host, this.session.profile, {
+      onStatusChanged: (s) => this.updateMpBanner(s),
+      onSystemAssigned: (sysId) => this.handleSpawnAssigned(sysId),
+      onSystemClaimFailed: (reason) => {
+        if (this.mpBanner) {
+          this.mpBanner.textContent = reason === 'no-systems-available'
+            ? 'Galaxy is full — try again later.'
+            : 'Spawn claim failed.';
+          this.mpBanner.classList.add('mp-banner-error');
+        }
+      },
+      onPlayersChanged: () => {
+        // W6-F: rebuild remote-owner labels and the top-right leaderboard.
+        // Leaderboard renders only the *other* players (self is excluded
+        // by remotePlayers()).
+        this.mpLeaderboard?.render(this.mpClient?.remotePlayers() ?? []);
+        this.refreshHomeMarkers();
+      },
+    });
+    this.mpLeaderboard = new Leaderboard(this.overlay);
+
+    const preferred = this.empire.eligibleSpawnSystemIds();
+    const persisted = this.empire.state.homeSystemId;
+    if (persisted && preferred.includes(persisted)) {
+      const i = preferred.indexOf(persisted);
+      preferred.splice(i, 1);
+      preferred.unshift(persisted);
+    }
+    this.mpClient.claimSystem(preferred);
+    this.publishMp();
+  }
+
+  private handleSpawnAssigned(systemId: string): void {
+    const st = this.empire.state;
+    if (!st.homeClaimed) {
+      this.empire.bootstrapInSystem(systemId);
+      const planetId = this.empire.state.homePlanetId;
+      if (planetId) {
+        this.navigateTo({ kind: 'planet', systemId, planetId });
+      }
+    } else if (st.homeSystemId !== systemId) {
+      // Server reassigned us — our slot must have been swept while we were
+      // away. Reset the empire and bootstrap into the newly assigned system.
+      this.empire.reset();
+      this.empire.bootstrapInSystem(systemId);
+      const planetId = this.empire.state.homePlanetId;
+      if (planetId) {
+        this.navigateTo({ kind: 'planet', systemId, planetId });
+      }
+    }
+    this.mpSpawnReady = true;
+    if (this.mpBanner) {
+      this.mpBanner.style.display = 'none';
+    }
+    this.publishMp();
+  }
+
+  private publishMp(): void {
+    if (!this.mpClient) return;
+    const st = this.empire.state;
+    const payload: PublicEmpireState = {
+      systemId: st.homeClaimed ? st.homeSystemId : null,
+      ownedPlanets: st.ownedPlanets,
+      outpostMoonId: st.outpostMoonId,
+      claimedSystems: st.claimedSystems,
+    };
+    this.mpClient.publishState(payload);
+  }
+
+  private makeMpBanner(): HTMLDivElement {
+    const b = document.createElement('div');
+    b.className = 'mp-status-banner';
+    b.textContent = 'Connecting to galaxy…';
+    this.overlay.appendChild(b);
+    return b;
+  }
+
+  private updateMpBanner(status: ConnectionStatus): void {
+    if (!this.mpBanner) return;
+    if (status === 'open') {
+      // Don't hide until spawn is ready — otherwise the banner blinks off
+      // while the claim handshake is still in flight.
+      if (this.mpSpawnReady) {
+        this.mpBanner.style.display = 'none';
+      } else {
+        this.mpBanner.textContent = 'Finding your spawn system…';
+      }
+      this.mpBanner.classList.remove('mp-banner-error');
+    } else if (status === 'connecting') {
+      this.mpBanner.style.display = 'block';
+      this.mpBanner.textContent = 'Connecting to galaxy…';
+      this.mpBanner.classList.remove('mp-banner-error');
+    } else {
+      this.mpBanner.style.display = 'block';
+      this.mpBanner.textContent = 'Disconnected — reconnecting…';
+      this.mpBanner.classList.remove('mp-banner-error');
+    }
+  }
+
   private onResize(): void {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -531,8 +708,17 @@ export class App {
   };
 }
 
+function canAffordCost(cost: Partial<ResourceBag>, have: ResourceBag): boolean {
+  for (const k of RESOURCE_KEYS) {
+    const need = cost[k];
+    if (need === undefined || need <= 0) continue;
+    if (have[k] < need) return false;
+  }
+  return true;
+}
+
 // Render a cost bag as inline pills, colour-coded per resource. Each pill
-// shows "have/need" and goes red when the player can't afford that resource —
+// shows the cost and goes red when the player can't afford that resource —
 // mirrors the upgrade-panel buy-button style so the annex flow feels familiar.
 function formatCostPills(cost: Partial<ResourceBag>, have: ResourceBag): string {
   const parts: string[] = [];

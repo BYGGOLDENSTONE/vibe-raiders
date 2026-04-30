@@ -5,6 +5,11 @@ export interface BlackHoleHandle {
   group: THREE.Group;
   diskMaterial: THREE.ShaderMaterial;
   haloMesh: THREE.Mesh;
+  // W6-H: an invisible, larger sphere wrapping the visible core so the Vibe
+  // Jam outgoing portal (clicking the black hole) has a generous hit area
+  // even when the camera is zoomed way out. Tagged with userData.kind='portal'
+  // so the picker can recognise it.
+  portalPickProxy: THREE.Mesh;
 }
 
 export function makeBlackHole(): BlackHoleHandle {
@@ -17,6 +22,18 @@ export function makeBlackHole(): BlackHoleHandle {
   const coreMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
   const core = new THREE.Mesh(coreGeo, coreMat);
   group.add(core);
+
+  // Portal pick proxy — invisible sphere ~2× the core, so even at galaxy
+  // overview distance the click target is comfortable to hit.
+  const proxyGeo = new THREE.SphereGeometry(inner * 1.6, 16, 16);
+  const proxyMat = new THREE.MeshBasicMaterial({
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+  });
+  const portalPickProxy = new THREE.Mesh(proxyGeo, proxyMat);
+  portalPickProxy.userData.kind = 'portal';
+  group.add(portalPickProxy);
 
   // Accretion disk: ring geometry on XY plane (we will tilt the group)
   const diskGeo = new THREE.RingGeometry(inner, outer, 256, 32);
@@ -55,7 +72,7 @@ export function makeBlackHole(): BlackHoleHandle {
   // Tilt the whole black hole so the disk is angled
   group.rotation.x = -Math.PI / 2 + 0.18;
 
-  return { group, diskMaterial: diskMat, haloMesh: halo };
+  return { group, diskMaterial: diskMat, haloMesh: halo, portalPickProxy };
 }
 
 export function updateBlackHole(

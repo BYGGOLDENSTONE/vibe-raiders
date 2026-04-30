@@ -3,7 +3,7 @@
 > **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 5 complete. Fresh saves auto-bootstrap a homeworld (the W4-D manual-claim flow was reverted at user request — single-player simplification, replaced with per-player claims when multiplayer ships in W6). System Expansion (W5) lets the player annex other home-system planets via a click-to-claim button on the planet panel; cost grows ×1.6 per claim, label markers pulse. Save key still v6 (dormant W4-D saves heal on load). Multiplayer (W6) and Wormhole rift (W7) pending.
+> **Status:** Wave 6 complete. Multiplayer is live — a start screen lets players pick Solo or Multiplayer, MP uses a PartyKit relay (`partykit/server.ts`) with deterministic per-slot system assignment so each of up to 16 players spawns in a different rocky+moon system. Solo and MP keep separate save slots (`vibecoder.empire.v6` vs `vibecoder.empire.mp.v1`). System Expansion is now a single auto-targeted "Annex" banner button that always picks the closest unowned home-system planet — the per-planet annex click is gone (incremental-idle minimum-click feel). After every home-system planet is owned, the wormhole-observatory chain unlocks. Public ownership (claimed system + owned planets) is broadcast and rendered as colored player-name prefixes on labels plus a top-right leaderboard. Vibe Jam webring portal is wired: clicking the central black hole exits to `vibej.am/portal/2026?username=…&color=…&ref=…`, and incoming `?portal=true` traffic skips the start screen and shows a return-portal pill back to the originating game. Debug panel removed. Wormhole rift (W7) pending.
 
 ---
 
@@ -155,6 +155,51 @@ The single-resource progression deadlock and a flat trickle-driven economy were 
 - **HOME UX** — top-right gold pill button (`gx-home-btn`) jumps the camera to the home planet from any view (smooth, via the existing `navigateTo` + `CameraController` transition). Home planet's label gets a `★ HOME · ` prefix; home system's label gets `★ HOME · ` (or `★★ HOME SYSTEM · ` if every planet in the system is owned). Other owned planets get a `✓ ` prefix. Breadcrumb mirrors the same star markers. Driven by `LabelManager.markHome` + `UI.setHomeContext`, refreshed on every empire emit.
 - **Save key bumped to v5** — old saves (v3, v4) auto-discard so every player picks up the new rocky home and the new economy. State now persists `claimedSystems`.
 
+### Wave 6 — multiplayer + portal + min-click annex (this session)
+
+The W4-D claim flow that came back as a multiplayer requirement was redesigned again — players don't pick their spawn at all in MP either. The relay assigns it. The W5 manual "click a planet to annex" was also dropped in favour of a single banner button.
+
+**Start screen + save split (W6-B/C):**
+
+- New `src/start-screen.ts` overlays the canvas on launch with two buttons (Solo, Multiplayer). MP reveals an optional name input + 8-colour palette; skipping yields `Player-XXXX` + a random palette colour.
+- Choice is persisted in `localStorage` under `vibecoder.mp.session.v1`. Subsequent visits skip the screen and fly straight in. A small "↻ change profile" link top-right wipes the session and reloads.
+- Empire constructor takes a `mode: 'solo' | 'mp'` flag; storage key is `vibecoder.empire.v6` (solo) or `vibecoder.empire.mp.v1` (MP). The two slots never cross-contaminate, so the solo career survives MP excursions.
+
+**PartyKit relay (W6-A/D):**
+
+- `partykit/server.ts` — single shared room ("galaxy"), in-memory `Map<playerId, PublicPlayer>` durably persisted to `room.storage` so reconnects keep the same spawn system. Stale players (24 h offline) get swept on the next room start. Max 16 players; when the room is full, new connections are rejected with a "Galaxy is full" banner client-side.
+- Wire protocol lives in `src/multiplayer/protocol.ts` (zero deps) so server and client share types without dragging Three.js into the worker bundle.
+- `src/multiplayer/client.ts` wraps `partysocket`. Auto-reconnects when the websocket drops; pending claim/state sends are queued and replayed on reopen so the game keeps running offline (Q3 in the W6 design — local-first, eventual sync). Connection status drives the bottom-centre `mp-status-banner`.
+- Spawn allocation: client computes its own deterministic priority list (galaxy order of rocky+moon systems, persisted system pinned first), server picks the first non-taken candidate. Player ID lives in `localStorage` (`vibecoder.mp.playerId.v1`) so a refresh keeps the same slot.
+- `Empire.bootstrapInSystem(systemId)` wires the empire into the assigned system (skipping the auto-pick). MP saves stay dormant until the relay assigns; solo saves keep auto-bootstrapping on creation.
+
+**Auto-annex by distance (W6-E) — solo + MP:**
+
+- Old W5 click-to-annex panel button is gone. The new flow is a single banner button: `Next annex: <name> · cost pills · [Annex]`.
+- `Empire.nextAnnexTarget()` returns the unowned home-system planet whose `orbitRadius` is closest to the home planet's, so claims march visibly outward (or inward) from the homeworld instead of jumping around.
+- Wormhole gate: `unlock-observatory` (and the `wormhole-transit` / `trade-hub` chain behind it) is hidden until `isHomeSystemFullyClaimed()`. Wired in `Empire.isVisible`.
+- Label markers: only the next-annex target pulses (replaces the W5 multi-planet pulse). Drives `nextAnnexPlanetId` in `HomeMarkerOpts` instead of the old `claimablePlanets: Set<string>`.
+
+**Public ownership viz (W6-F):**
+
+- Each empire publishes `{ systemId, ownedPlanets, outpostMoonId, claimedSystems }` to the relay on every emit. Resources and unlockedNodes are NOT replicated — the upgrade tree is private per the W6 design.
+- `LabelManager.markHome` accepts `remotePlanetOwners` + `remoteSystemOwners` maps. Other players' planets/systems get a `◆ <name> · ` prefix tinted with the owner's color via `--remote-color` CSS var.
+- Top-right `mp-leaderboard` shows every other player as a coloured chip with their system + planet counts. Sorted by planet count desc, then alphabetical for stable order. Re-renders on every `onPlayersChanged`.
+
+**Vibe Jam portal (W6-H):**
+
+- Outgoing: black hole has an invisible `portalPickProxy` sphere ~2× the visible core; the picker tags hits on it as `kind: 'portal'`. App.handlePick redirects to `https://vibej.am/portal/2026?username=…&color=…&speed=1&ref=<our-origin>`. A galaxy-view-only `gx-portal-hint` pill near the bottom-centre tells the player the black hole is clickable.
+- Incoming: `parseIncomingPortal()` reads `?portal=true&username=…&color=…&ref=…` from `window.location.search`. If present, main.ts skips the start screen, builds an MP SessionConfig with the visitor's profile, persists it (carrying `portalRef`), and strips the URL params via `history.replaceState`.
+- Return portal: when SessionConfig has `portalRef`, a top-left pulsing `portal-return-btn` reads "↩ return to <hostname>" and ships the player back via `window.location.href = ref`.
+
+**Debug panel removed:**
+
+- The old `src/empire/debug.ts` (1000-resource grant + reset buttons) was a developer aid that didn't belong in the shipped game. Reset still possible via the change-profile link → wipe session → fresh launch.
+
+**Files touched:** `src/main.ts` (boot flow), `src/start-screen.ts` (new), `src/portal.ts` (new), `src/multiplayer/protocol.ts` / `client.ts` / `profile.ts` / `leaderboard.ts` (new), `partykit/server.ts` + `partykit.json` (new), `src/galaxy/app.ts` (MP wiring + portal hint + auto-annex banner + remote-owner ctx), `src/galaxy/blackhole.ts` (portal pick proxy), `src/galaxy/picking.ts` (`kind: 'portal'`), `src/galaxy/labels.ts` (`remotePlanetOwners` / `remoteSystemOwners`, single `nextAnnexPlanetId`), `src/galaxy/ui.ts` (annex banner with embedded button, removed per-planet annex), `src/empire/empire.ts` (mode flag, `bootstrapInSystem`, `nextAnnexTarget` / `claimNextAnnex`, wormhole-observatory gate), `src/empire/types.ts` (`STORAGE_KEY_SOLO` / `STORAGE_KEY_MP`, `GameMode`), `src/style.css` (start screen, MP banner, leaderboard, return portal, annex banner, removed debug panel CSS).
+
+**Save:** solo still `vibecoder.empire.v6`. MP uses `vibecoder.empire.mp.v1`. Player identity for MP lives in `vibecoder.mp.playerId.v1`. Session config (mode + profile + optional portalRef) lives in `vibecoder.mp.session.v1`.
+
 ### Known issue — solved
 
 The "single-resource progression deadlock" from W3 is gone:
@@ -176,7 +221,7 @@ The "single-resource progression deadlock" from W3 is gone:
 ## Locked tech rules
 
 - **3D** — Three.js (WebGL only, no WebGPU). 100% procedural — NO Blender / external assets / textures. Geometry + shaders + lighting only.
-- **Multiplayer** — PartyKit relay (Cloudflare Workers). Single shared room, ≤16 players. (Not wired yet.)
+- **Multiplayer** — PartyKit relay (Cloudflare Workers). Single shared room, ≤16 players. Wired in W6 — `partykit/server.ts` + `src/multiplayer/*`.
 - **Bundler** — Vite + TypeScript (strict, `verbatimModuleSyntax`, `noUnused*`, `erasableSyntaxOnly`).
 - **Mandatory widget** — `<script async src="https://vibej.am/2026/widget.js"></script>` in `index.html`. Do not remove.
 - **Public repo, commits land on `main`.**
@@ -191,6 +236,9 @@ The "single-resource progression deadlock" from W3 is gone:
 ```
 gamejam/
 ├── CLAUDE.md
+├── partykit.json                   PartyKit project config (W6)
+├── partykit/
+│   └── server.ts                   relay — slot allocation, ownership broadcast, idle sweep
 ├── docs/
 │   ├── GALAXY.md
 │   └── balance.csv             W4-C balance audit (old vs new tier values + diagnosis)
@@ -200,33 +248,40 @@ gamejam/
 ├── vite.config.ts
 ├── public/favicon.svg
 ├── src/
-│   ├── main.ts
+│   ├── main.ts                     boot flow — incoming portal? saved session? start screen?
+│   ├── start-screen.ts             Wave-6 — Solo / Multiplayer chooser + profile picker
+│   ├── portal.ts                   Wave-6 — Vibe Jam webring in/out + return-portal pill
 │   ├── style.css                   global UI + empire styles
 │   ├── galaxy/                     Wave-1 simulation
-│   │   ├── app.ts                  orchestrator + render loop (also hosts Empire tick)
+│   │   ├── app.ts                  orchestrator + render loop (also hosts Empire tick + MP wiring)
 │   │   ├── camera-controller.ts
 │   │   ├── types.ts
 │   │   ├── rng.ts
 │   │   ├── generation.ts
 │   │   ├── shaders.ts
 │   │   ├── starfield.ts
-│   │   ├── blackhole.ts
+│   │   ├── blackhole.ts            includes `portalPickProxy` for the W6-H portal click target
 │   │   ├── star.ts
 │   │   ├── planet.ts
 │   │   ├── system.ts
 │   │   ├── galaxy.ts
-│   │   ├── labels.ts
-│   │   ├── picking.ts
-│   │   └── ui.ts                   breadcrumb, layer switcher, detail panel
-│   └── empire/                     Wave-2/3 gameplay layer
-│       ├── types.ts                ResourceKey, EmpireState, UpgradeNode
-│       ├── upgrades.ts             ~150-node skill tree catalogue (grouped into chains by panel.ts)
-│       ├── empire.ts               state, tick, save/load, starting planet selection
-│       ├── hud.ts                  top resource bar + Upgrades launcher button (chips carry data-resource)
-│       ├── panel.ts                Branch Browser modal — left chain rail + tier-card detail pane
-│       ├── vfx.ts                  buy effects: drain particles, burst, UNLOCKED text, tier-card flash
-│       ├── surface.ts              Wave-3 — factory towers + drone swarm anchored to home planet
-│       └── moon-outpost.ts         Wave-4-B — dome on primary moon + tether + shuttles
+│   │   ├── labels.ts               + remote-owner markers (W6-F)
+│   │   ├── picking.ts              + 'portal' kind for the black hole proxy
+│   │   └── ui.ts                   breadcrumb, layer switcher, detail panel, annex banner
+│   ├── empire/                     Wave-2/3 gameplay layer
+│   │   ├── types.ts                ResourceKey, EmpireState, UpgradeNode, GameMode + storage keys
+│   │   ├── upgrades.ts             ~150-node skill tree catalogue (grouped into chains by panel.ts)
+│   │   ├── empire.ts               state, tick, save/load, mode-aware bootstrap, auto-annex
+│   │   ├── hud.ts                  top resource bar + Upgrades launcher button (chips carry data-resource)
+│   │   ├── panel.ts                Branch Browser modal — left chain rail + tier-card detail pane
+│   │   ├── vfx.ts                  buy effects: drain particles, burst, UNLOCKED text, tier-card flash
+│   │   ├── surface.ts              Wave-3 — factory towers + drone swarm anchored to home planet
+│   │   └── moon-outpost.ts         Wave-4-B — dome on primary moon + tether + shuttles
+│   └── multiplayer/                Wave-6 client side
+│       ├── protocol.ts             wire types shared with partykit/server.ts
+│       ├── client.ts               partysocket wrapper — connection state, queueing, players cache
+│       ├── profile.ts              SessionConfig + 8-colour palette + auto-name
+│       └── leaderboard.ts          top-right chip list of remote players
 └── node_modules/
 ```
 
@@ -239,7 +294,7 @@ gamejam/
 | `npm run dev` | Vite dev server on localhost:5173 |
 | `npm run build` | Strict tsc + vite production build → `dist/` |
 | `npm run preview` | Serve `dist/` locally |
-| `npm run party:dev` | PartyKit relay (no `partykit/server.ts` yet — will fail until written) |
+| `npm run party:dev` | PartyKit relay on `localhost:1999`. Run alongside `npm run dev` for full MP. |
 | `npm run party:deploy` | Deploy relay to Cloudflare |
 | `npx tsc --noEmit` | Type-check only |
 
@@ -253,11 +308,11 @@ gamejam/
 | **W4-A** | ✅ Complete. Economy rewrite (planet income, synergy, system tier, rocky-only home, cost rebalance) + HOME button + label markers. |
 | **W4-B** | ✅ Complete. Dome + tether + shuttles on the chosen outpost moon. Visibility gated to the home-system view. |
 | **W4-C** | ✅ Complete. Balance pass — droneThroughput formula now additive (was multiplicative compound), tier values reduced ~4×, drone HUD chip added. Single-planet peak ~350/s instead of ~5.7M/s. Driven by `docs/balance.csv`. |
-| **W4-D** | ⤺ Reverted in W5 (single-player simplification — W6 will reintroduce per-player claim for multiplayer). |
+| **W4-D** | ⤺ Reverted in W5; not coming back — W6 settled on relay-assigned spawns instead of player picks. |
 | **W4-E** | ✅ Complete. Moon outpost claim flow — Moon Outpost unlock now prompts the player to click a moon; only the chosen moon contributes income and renders the dome/tether. |
-| **W5** | ✅ Complete. Auto-homeworld bootstrap on fresh save + System Expansion: `system-expansion` unlock enables per-planet annex with a `✦ Annex Planet` button + cost pills + label pulse. Cost ×1.6 per claim, income flows immediately. |
-| **W6** | PartyKit relay — replicate each player's public empire state (claimed system, owned planets, owned upgrades). Other players' systems show their progress visually. **Reintroduce per-player homeworld claim flow here** (W4-D's UI is gone but the concept of "pick where you spawn" comes back, scoped to unclaimed eligible planets in the shared galaxy). |
-| **W7** | Wormhole transit — claim a second system at T2 (×100 multiplier already wired in `claimedSystems`), visualised by a wormhole rift between systems. Trade Hub for inter-player resource swaps. |
+| **W5** | ✅ Complete. Auto-homeworld bootstrap on fresh save + System Expansion. Per-planet annex panel button later replaced by the W6-E single banner button. |
+| **W6** | ✅ Complete. PartyKit relay + start screen + per-slot spawn allocation + auto-annex banner + public ownership viz + Vibe Jam portal in/out. Debug panel removed. |
+| **W7** | Wormhole transit — claim a second system at T2 (×100 multiplier already wired in `claimedSystems`), visualised by a wormhole rift between systems. Trade Hub for inter-player resource swaps. Gated behind W6-E's "home system fully claimed → wormhole-observatory unlocks" milestone. |
 
 Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live constants: `PLANET_INCOME`, `SYNERGY_PER_PLANET = 0.2`, `SYSTEM_TIER_BASE = 100`, `MOON_OUTPOST_INCOME = 5/s crystal`, `BASE_STORAGE_CAP = 1500`, `PROD_MUL_PER_TIER`, milestone costs in `src/empire/upgrades.ts` `expSteps`. W5 annex: `SYSTEM_PLANET_CLAIM_BASE = {metal:5000, water:3000, crystal:2000}`, `SYSTEM_PLANET_CLAIM_GROWTH = 1.6` in `src/empire/empire.ts`. Wave 4-B visuals: `DOME_DIAMETER_FRAC`, `TETHER_RADIUS_FRAC`, `SHUTTLE_COUNT`, `SHUTTLE_BASE_SPEED` in `src/empire/moon-outpost.ts`.
 
@@ -269,4 +324,9 @@ Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live co
 - Plan before implementing; wait for user confirmation before each phase.
 - Commit only when user explicitly approves.
 - Update this file after each completed phase so future sessions can resume.
-- Storage keys to know: `vibecoder.empire.v6` (full empire state — bumped this session for the homeClaimed + outpostMoonId fields and the balance pass; old v5 saves auto-discard), `vibecoder.empire.panelWidth.v2` (legacy panel width — unused after W2 redesign, can be deleted).
+- Storage keys to know:
+  - `vibecoder.empire.v6` — solo empire state.
+  - `vibecoder.empire.mp.v1` — multiplayer empire state (separate slot, fresh on first MP launch).
+  - `vibecoder.mp.session.v1` — current mode + profile + optional `portalRef`. Cleared by the "↻ change profile" link.
+  - `vibecoder.mp.playerId.v1` — stable per-browser identity for the relay. Reusing this means refresh keeps the same spawn system and owned planets.
+  - `vibecoder.empire.panelWidth.v2` — legacy panel width (unused after W2 redesign, can be deleted).

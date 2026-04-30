@@ -167,4 +167,16 @@ export interface EmpireState {
 
 // W4-C bumped from v5 — homeClaimed flow + outpostMoonId state + rebalance.
 // Old saves auto-discard so every player picks up the new economy + claim flow.
-export const STORAGE_KEY = 'vibecoder.empire.v6';
+export const STORAGE_KEY_SOLO = 'vibecoder.empire.v6';
+// W6 — multiplayer keeps a separate save so the solo career isn't disturbed
+// when the player drops into a shared galaxy and back.
+export const STORAGE_KEY_MP = 'vibecoder.empire.mp.v1';
+
+// Game mode determines which save slot is used and whether multiplayer state
+// is wired up. Selected on the start screen and threaded through Empire +
+// upstream UI so neither layer has to import multiplayer code unconditionally.
+export type GameMode = 'solo' | 'mp';
+
+export function storageKeyFor(mode: GameMode): string {
+  return mode === 'mp' ? STORAGE_KEY_MP : STORAGE_KEY_SOLO;
+}

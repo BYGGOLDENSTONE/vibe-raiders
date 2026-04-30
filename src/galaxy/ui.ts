@@ -50,18 +50,18 @@ interface HomeCtx {
   fullSystemClaimed: boolean;
 }
 
-// Slim hook surface UI uses to render the W4-E / W5 claim flows without taking
-// a hard dependency on Empire (keeps galaxy/* free of empire types).
+// Slim hook surface UI uses to render the W4-E / W6-E claim flows without
+// taking a hard dependency on Empire (keeps galaxy/* free of empire types).
 export interface EmpireCtx {
   needsMoonChoice: boolean;
-  // W5 — system-expansion bought + at least one home-system planet still
-  // unowned. Drives the "Expand your empire" banner.
-  hasClaimablePlanets: boolean;
-  // Per-planet annex hooks. Cost is rendered as already-formatted HTML pills
-  // so the UI module stays free of resource/colour tables.
-  canClaimPlanet: (planetId: string) => boolean;
-  claimPlanetCostHtml: (planetId: string) => string;
-  claimPlanet: (planetId: string) => void;
+  // W6-E — the single auto-targeted annex. null when no annex is available
+  // (system-expansion not unlocked, or every home-system planet owned).
+  nextAnnex: {
+    planetName: string;
+    canAfford: boolean;
+    costHtml: string;     // pre-formatted cost pills, same renderer as upgrades
+  } | null;
+  claimNextAnnex: () => void;
 }
 
 export class UI {
@@ -76,10 +76,8 @@ export class UI {
   private home: HomeCtx = { systemId: null, planetId: null, fullSystemClaimed: false };
   private empireCtx: EmpireCtx = {
     needsMoonChoice: false,
-    hasClaimablePlanets: false,
-    canClaimPlanet: () => false,
-    claimPlanetCostHtml: () => '',
-    claimPlanet: () => {},
+    nextAnnex: null,
+    claimNextAnnex: () => {},
   };
   private layer: LayerState = { kind: 'galaxy', systemId: null, planetId: null };
 
@@ -113,14 +111,13 @@ export class UI {
     this.banner.style.display = 'none';
     root.appendChild(this.banner);
 
-    // Delegated click for the W5 annex button rendered inside the planet
-    // panel — kept in one place so the renderer can churn the panel freely
-    // without leaking handlers.
-    this.panel.addEventListener('click', (e) => {
-      const btn = (e.target as HTMLElement).closest('[data-annex-planet]') as HTMLElement | null;
+    // W6-E: the "Annex" button now lives inside the banner instead of the
+    // per-planet panel. One delegated click handler routes any banner
+    // button back into the empire layer.
+    this.banner.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest('[data-claim-next]') as HTMLElement | null;
       if (!btn) return;
-      const planetId = btn.dataset.annexPlanet ?? '';
-      if (planetId) this.empireCtx.claimPlanet(planetId);
+      this.empireCtx.claimNextAnnex();
     });
 
     this.hint = el('div', 'gx-hint');
@@ -151,21 +148,33 @@ export class UI {
   }
 
   private renderBanner(): void {
-    // Banner priority: moon-pick (W4-E) over annex (W5). Moon-pick is always
-    // a one-shot follow-up to a specific purchase, while system expansion
-    // lingers across many planets and shouldn't drown out the moon prompt.
+    // Banner priority: moon-pick (W4-E) over annex (W6-E). Moon-pick is a
+    // one-shot follow-up to a specific purchase, while annex sits there
+    // for the entire system-expansion phase and shouldn't drown out the
+    // moon prompt the moment it appears.
     let html = '';
+    let extraClass = '';
     if (this.empireCtx.needsMoonChoice) {
       html = `
         <span class="gx-banner-ico">◐</span>
         <span><strong>Pick an outpost moon</strong> — open your home planet view and click one of its moons.</span>
       `;
-    } else if (this.empireCtx.hasClaimablePlanets) {
+    } else if (this.empireCtx.nextAnnex) {
+      const { planetName, canAfford, costHtml } = this.empireCtx.nextAnnex;
+      const btnClass = canAfford ? 'gx-annex-banner-btn ready' : 'gx-annex-banner-btn waiting';
+      const btnAttrs = canAfford ? '' : 'disabled';
       html = `
         <span class="gx-banner-ico">✦</span>
-        <span><strong>Expand your empire</strong> — click eligible planets in your home system to annex them.</span>
+        <span class="gx-banner-text">
+          <span class="gx-banner-eyebrow">Next annex</span>
+          <strong>${escapeHtml(planetName)}</strong>
+        </span>
+        <span class="gx-annex-banner-cost">${costHtml}</span>
+        <button class="${btnClass}" data-claim-next ${btnAttrs}>Annex</button>
       `;
+      extraClass = 'gx-banner-annex';
     }
+    this.banner.className = 'gx-banner' + (extraClass ? ' ' + extraClass : '');
     if (html) {
       this.banner.innerHTML = html;
       this.banner.style.display = '';
@@ -342,16 +351,9 @@ export class UI {
       : `${p.moons.length} (${p.moons.map((m) => escapeHtml(m.name.split(' ').pop() ?? '')).join(', ')})`;
     const riskCls = RISK_CLASS[p.risk];
 
-    let claimRow = '';
-    if (this.empireCtx.canClaimPlanet(p.id)) {
-      const costHtml = this.empireCtx.claimPlanetCostHtml(p.id);
-      claimRow = `
-        <button class="gx-annex-btn" data-annex-planet="${escapeHtml(p.id)}">
-          <span class="gx-annex-label">✦ Annex Planet</span>
-          <span class="gx-annex-cost">${costHtml}</span>
-        </button>
-      `;
-    }
+    // W6-E removed the per-planet annex button — annexing is now driven from
+    // a single banner control that always targets the closest unowned home-
+    // system planet, so the player only ever has one button to click.
 
     return `
       <div class="gx-panel-eyebrow">Planet focus</div>
@@ -368,7 +370,6 @@ export class UI {
         <div class="gx-panel-row"><span class="gx-k">Rings</span><span class="gx-v">${p.hasRings ? 'Yes' : 'No'}</span></div>
         <div class="gx-panel-row"><span class="gx-k">Moons</span><span class="gx-v">${moonsLine}</span></div>
       </div>
-      ${claimRow}
     `;
   }
 

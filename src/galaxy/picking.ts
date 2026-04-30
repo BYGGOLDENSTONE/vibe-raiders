@@ -3,7 +3,7 @@ import type { GalaxyHandle } from './galaxy';
 import type { LayerState } from './types';
 
 export interface PickResult {
-  kind: 'star' | 'planet';
+  kind: 'star' | 'planet' | 'portal';
   systemId: string;
   planetId: string | null;
 }
@@ -30,6 +30,9 @@ export class Picker {
 
     const targets: THREE.Object3D[] = [];
     if (layer.kind === 'galaxy') {
+      // Black-hole portal proxy is only clickable from galaxy view — once
+      // you're zoomed into a system, you're past it.
+      targets.push(galaxy.blackHole.portalPickProxy);
       // Use the invisible pick proxy so distant stars stay clickable
       for (const sys of galaxy.systems.values()) targets.push(sys.star.pickProxy);
     } else if (layer.kind === 'system') {
@@ -55,6 +58,9 @@ export class Picker {
     const hit = hits[0];
     if (!hit) return null;
     const ud = hit.object.userData;
+    if (ud.kind === 'portal') {
+      return { kind: 'portal', systemId: '', planetId: null };
+    }
     if (ud.kind === 'star') {
       return { kind: 'star', systemId: ud.systemId as string, planetId: null };
     }

@@ -6,12 +6,12 @@ import {
   MOON_OUTPOST_INCOME,
   PLANET_INCOME,
   RESOURCE_KEYS,
-  STORAGE_KEY,
   SYNERGY_PER_PLANET,
   SYSTEM_TIER_BASE,
   emptyBag,
+  storageKeyFor,
 } from './types';
-import type { EmpireState, PlanetIncome, ResourceBag, ResourceKey, UnlockFlag, UpgradeNode } from './types';
+import type { EmpireState, GameMode, PlanetIncome, ResourceBag, ResourceKey, UnlockFlag, UpgradeNode } from './types';
 import { CORE_NODE_ID, NODES_BY_ID, UPGRADE_NODES, canAfford, subtractCost } from './upgrades';
 
 // W5 — claim cost for annexing a planet in the home system. Scales with how
@@ -38,15 +38,19 @@ export interface EmpireMetrics {
 
 export class Empire {
   state: EmpireState;
+  mode: GameMode;
   private galaxy: GalaxyData;
   private seed: number;
+  private storageKey: string;
   private listeners = new Set<() => void>();
   private saveAccum = 0;
 
-  constructor(galaxy: GalaxyData, seed: number) {
+  constructor(galaxy: GalaxyData, seed: number, mode: GameMode = 'solo') {
     this.galaxy = galaxy;
     this.seed = seed;
-    const loaded = loadFromStorage(seed);
+    this.mode = mode;
+    this.storageKey = storageKeyFor(mode);
+    const loaded = loadFromStorage(this.storageKey, seed);
     if (loaded) {
       this.state = loaded;
       // Heal old saves by backfilling missing fields.
@@ -58,16 +62,19 @@ export class Empire {
       if (this.state.homeClaimed === undefined) {
         this.state.homeClaimed = !!this.state.homePlanetId;
       }
-      // W5: dormant saves (W4-D era, homeClaimed=false) get bootstrapped to
-      // an auto-picked homeworld so every existing player drops straight into
-      // the new instant-start flow on first reload.
-      if (!this.state.homeClaimed) {
+      // W5: dormant solo saves (W4-D era, homeClaimed=false) get bootstrapped
+      // to an auto-picked homeworld. In MP we never auto-pick — the spawn
+      // system comes from the relay (W6-D), so an unclaimed MP save stays
+      // dormant until App calls bootstrapInSystem().
+      if (!this.state.homeClaimed && mode === 'solo') {
         this.bootstrapHomeworld();
       }
     } else {
       this.state = createEmptyEmpire(seed);
-      this.bootstrapHomeworld();
-      this.save();
+      if (mode === 'solo') {
+        this.bootstrapHomeworld();
+        this.save();
+      }
     }
     if (!this.state.unlockedNodes.includes(CORE_NODE_ID)) {
       this.state.unlockedNodes.unshift(CORE_NODE_ID);
@@ -75,8 +82,8 @@ export class Empire {
   }
 
   // Pick a deterministic eligible homeworld (rocky + at least one moon) from
-  // the galaxy and write the home/owned/system fields. Multiplayer (W6) will
-  // replace this with a per-player coordinated claim — see project memory.
+  // the galaxy and write the home/owned/system fields. Solo only — MP uses
+  // bootstrapInSystem() with a server-assigned spawn system instead.
   private bootstrapHomeworld(): void {
     const pick = pickStartingPlanet(this.galaxy);
     if (!pick) return; // ~impossible with ~200 systems, but keep dormant if it happens
@@ -85,6 +92,50 @@ export class Empire {
     this.state.homePlanetId = pick.planet.id;
     this.state.ownedPlanets = [pick.planet.id];
     this.state.claimedSystems = { [pick.system.id]: 1 };
+  }
+
+  // W6-D: MP spawn — the relay assigned us a system, pick the best rocky+moon
+  // planet within it. Trusts the caller to validate the system id; quietly
+  // returns false if the system has no eligible planet (shouldn't happen
+  // because the client only nominates systems that pass the same filter).
+  bootstrapInSystem(systemId: string): boolean {
+    const sys = this.galaxy.systems.find((s) => s.id === systemId);
+    if (!sys) return false;
+    let temperate: PlanetData | null = null;
+    let any: PlanetData | null = null;
+    for (const p of sys.planets) {
+      if (p.type !== 'rocky') continue;
+      if (p.moons.length === 0) continue;
+      if (!any) any = p;
+      if (!temperate && p.temperatureC >= -30 && p.temperatureC <= 50) {
+        temperate = p;
+        break;
+      }
+    }
+    const planet = temperate ?? any;
+    if (!planet) return false;
+    this.state.homeClaimed = true;
+    this.state.homeSystemId = sys.id;
+    this.state.homePlanetId = planet.id;
+    this.state.ownedPlanets = [planet.id];
+    this.state.claimedSystems = { [sys.id]: 1 };
+    this.save();
+    this.emit();
+    return true;
+  }
+
+  // Eligibility list used by App to build the "preferred systems" list it
+  // sends to the relay during a claim handshake. Returns systemIds in galaxy
+  // order so every client agrees on the priority order — server's first-fit
+  // pick lands on a stable assignment.
+  eligibleSpawnSystemIds(): string[] {
+    const out: string[] = [];
+    for (const s of this.galaxy.systems) {
+      for (const p of s.planets) {
+        if (p.type === 'rocky' && p.moons.length > 0) { out.push(s.id); break; }
+      }
+    }
+    return out;
   }
 
   // --- Read-only getters ----------------------------------------------------
@@ -164,6 +215,40 @@ export class Empire {
     if (!sys) return [];
     return sys.planets.filter((p) => this.canClaimSystemPlanet(p));
   }
+
+  // W6-E — single auto-targeted annex flow. Pick the unowned home-system
+  // planet whose orbit radius is closest to the home planet's, so claims
+  // visibly march outward (or inward) instead of picking randomly. This is
+  // the only annex entry point in the new UX — manual per-planet click is
+  // gone in favour of one always-on "Annex" button.
+  nextAnnexTarget(): PlanetData | null {
+    if (!this.hasUnlock('system-expansion')) return null;
+    const sys = this.homeSystem();
+    if (!sys) return null;
+    const home = sys.planets.find((p) => p.id === this.state.homePlanetId);
+    if (!home) return null;
+    let best: PlanetData | null = null;
+    let bestDist = Infinity;
+    for (const p of sys.planets) {
+      if (p.id === home.id) continue;
+      if (this.state.ownedPlanets.includes(p.id)) continue;
+      const d = Math.abs(p.orbitRadius - home.orbitRadius);
+      if (d < bestDist) { bestDist = d; best = p; }
+    }
+    return best;
+  }
+
+  nextAnnexCost(): Partial<ResourceBag> | null {
+    const target = this.nextAnnexTarget();
+    if (!target) return null;
+    return this.systemPlanetClaimCost(target);
+  }
+
+  claimNextAnnex(): boolean {
+    const target = this.nextAnnexTarget();
+    if (!target) return false;
+    return this.claimSystemPlanet(target.id);
+  }
   // Resolve the chosen outpost moon back to a planet/system pair so income can
   // be tier-scaled and the renderer knows where to attach the dome.
   outpostMoonContext(): { planet: PlanetData; systemId: string } | null {
@@ -202,6 +287,10 @@ export class Empire {
   isVisible(node: UpgradeNode): boolean {
     if (node.requiresUnlock && !this.hasUnlock(node.requiresUnlock)) return false;
     if (node.requiresResource && !this.producesResource(node.requiresResource)) return false;
+    // W6-E gate: the wormhole path stays sealed until every home-system
+    // planet is annexed. Hides observatory + transit + trade-hub at once
+    // because each later node has the previous as its prereq node.
+    if (node.id === 'unlock-observatory' && !this.isHomeSystemFullyClaimed()) return false;
     return true;
   }
 
@@ -370,13 +459,17 @@ export class Empire {
   save(): void {
     this.state.lastSavedAt = Date.now();
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+      localStorage.setItem(this.storageKey, JSON.stringify(this.state));
     } catch { /* quota / private browsing — silent */ }
   }
 
   reset(): void {
     this.state = createEmptyEmpire(this.seed);
-    this.bootstrapHomeworld();
+    // Solo resets re-pick a homeworld immediately. MP resets stay dormant
+    // until App re-claims a spawn system from the relay.
+    if (this.mode === 'solo') {
+      this.bootstrapHomeworld();
+    }
     this.state.unlockedNodes.unshift(CORE_NODE_ID);
     this.save();
     this.emit();
@@ -406,17 +499,6 @@ export class Empire {
     return this.hasUnlock('moon-outpost') && !this.state.outpostMoonId;
   }
 
-  // Debug-only: drop `amount` into every resource, bypassing storage caps.
-  // Tick treats the cap as a production ceiling (it stops *accruing* at cap)
-  // rather than a hard upper bound, so debug-granted excess is preserved.
-  grantAll(amount: number): void {
-    for (const k of RESOURCE_KEYS) {
-      this.state.resources[k] += amount;
-    }
-    this.save();
-    this.emit();
-  }
-
   // --- Subscriptions -------------------------------------------------------
 
   subscribe(fn: () => void): () => void {
@@ -433,9 +515,9 @@ export class Empire {
 
 // --- Factory & helpers ----------------------------------------------------
 
-function loadFromStorage(seed: number): EmpireState | null {
+function loadFromStorage(storageKey: string, seed: number): EmpireState | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as EmpireState;
     if (parsed.seed !== seed) return null;
