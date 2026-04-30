@@ -1,41 +1,41 @@
 import type { GalaxyHandle } from './galaxy';
 import type { EconomyKind, LayerKind, LayerState, PlanetData, RiskLevel, SystemData } from './types';
 
-const PLANET_TYPE_LABEL_TR: Record<string, string> = {
-  rocky:  'Kayalık',
-  ocean:  'Okyanus',
-  gas:    'Gaz Devi',
-  ice:    'Buz',
-  lava:   'Lav',
-  desert: 'Çöl',
-  toxic:  'Zehirli',
+const PLANET_TYPE_LABEL: Record<string, string> = {
+  rocky:  'Rocky',
+  ocean:  'Ocean',
+  gas:    'Gas Giant',
+  ice:    'Ice',
+  lava:   'Lava',
+  desert: 'Desert',
+  toxic:  'Toxic',
 };
 
-const STAR_CLASS_LABEL_TR: Record<string, string> = {
-  'red-dwarf':  'Kırmızı Cüce',
-  'orange':     'Turuncu Yıldız',
-  'yellow':     'Sarı Yıldız',
-  'white-blue': 'Beyaz-Mavi',
-  'blue-giant': 'Mavi Dev',
+const STAR_CLASS_LABEL: Record<string, string> = {
+  'red-dwarf':  'Red Dwarf',
+  'orange':     'Orange Star',
+  'yellow':     'Yellow Star',
+  'white-blue': 'White-Blue',
+  'blue-giant': 'Blue Giant',
 };
 
-const ECONOMY_LABEL_TR: Record<EconomyKind, string> = {
-  'colony-core':     'Koloni çekirdeği',
-  'science-line':    'Bilim hattı',
-  'trade-hub':       'Ticaret kavşağı',
-  'frontier-mining': 'Sınır madenciliği',
-  'tourism-belt':    'Turizm kuşağı',
-  'industrial':      'Endüstri merkezi',
-  'military':        'Askeri üs',
-  'lost-colony':     'Kayıp koloni',
-  'empty':           'Boş sistem',
+const ECONOMY_LABEL: Record<EconomyKind, string> = {
+  'colony-core':     'Colony Core',
+  'science-line':    'Science Line',
+  'trade-hub':       'Trade Hub',
+  'frontier-mining': 'Frontier Mining',
+  'tourism-belt':    'Tourism Belt',
+  'industrial':      'Industrial Hub',
+  'military':        'Military Base',
+  'lost-colony':     'Lost Colony',
+  'empty':           'Empty System',
 };
 
-const RISK_LABEL_TR: Record<RiskLevel, string> = {
-  low:     'Düşük',
-  medium:  'Orta',
-  high:    'Yüksek',
-  extreme: 'Aşırı',
+const RISK_LABEL: Record<RiskLevel, string> = {
+  low:     'Low',
+  medium:  'Medium',
+  high:    'High',
+  extreme: 'Extreme',
 };
 
 const RISK_CLASS: Record<RiskLevel, string> = {
@@ -62,7 +62,7 @@ export class UI {
 
     this.switcher = el('div', 'gx-switcher');
     this.switcher.setAttribute('role', 'group');
-    this.switcher.setAttribute('aria-label', 'Görünüm katmanı');
+    this.switcher.setAttribute('aria-label', 'View layer');
     root.appendChild(this.switcher);
 
     this.panel = el('div', 'gx-panel');
@@ -73,9 +73,9 @@ export class UI {
 
     this.hint = el('div', 'gx-hint');
     this.hint.innerHTML = `
-      <span><strong>Sol tık</strong> seç</span>
-      <span><strong>Sağ tık + sürükle</strong> döndür</span>
-      <span><strong>Tekerlek</strong> yaklaş/uzaklaş</span>
+      <span><strong>Left click</strong> select</span>
+      <span><strong>Right click + drag</strong> orbit</span>
+      <span><strong>Wheel</strong> zoom</span>
     `;
     root.appendChild(this.hint);
   }
@@ -91,7 +91,7 @@ export class UI {
   private renderBreadcrumb(layer: LayerState): void {
     const parts: { label: string; onClick: (() => void) | null }[] = [];
     parts.push({
-      label: 'Galaksi',
+      label: 'Galaxy',
       onClick: layer.kind === 'galaxy' ? null : () =>
         this.navigate({ kind: 'galaxy', systemId: null, planetId: null }),
     });
@@ -137,9 +137,9 @@ export class UI {
       return btn;
     };
     this.switcher.innerHTML = '';
-    this.switcher.appendChild(make('planet', 'Gezegen'));
-    this.switcher.appendChild(make('system', 'Sistem'));
-    this.switcher.appendChild(make('galaxy', 'Galaksi'));
+    this.switcher.appendChild(make('planet', 'Planet'));
+    this.switcher.appendChild(make('system', 'System'));
+    this.switcher.appendChild(make('galaxy', 'Galaxy'));
   }
 
   private canGoTo(layer: LayerState, kind: LayerKind): boolean {
@@ -175,14 +175,14 @@ export class UI {
     if (layer.kind === 'galaxy') {
       const count = this.galaxy.systems.size;
       this.panel.innerHTML = `
-        <div class="gx-panel-eyebrow">Galaksi katmanı</div>
-        <div class="gx-panel-title">Galaksi Çekirdeği</div>
-        <div class="gx-panel-sub">${count} yıldız sistemi · Süper kütleli kara delik</div>
-        <p class="gx-panel-desc">Yıldız sistemleri merkezdeki kara deliğin etrafında 2D düzlemde döner. Bir sistem seç ve oraya akarsın.</p>
+        <div class="gx-panel-eyebrow">Galaxy layer</div>
+        <div class="gx-panel-title">Galactic Core</div>
+        <div class="gx-panel-sub">${count} star systems · Supermassive black hole</div>
+        <p class="gx-panel-desc">Star systems orbit the central black hole on a 2D plane. Pick a system and the camera streams you in.</p>
         <div class="gx-panel-grid">
-          <div class="gx-panel-row"><span class="gx-k">Sistemler</span><span class="gx-v">${count}</span></div>
-          <div class="gx-panel-row"><span class="gx-k">Merkez</span><span class="gx-v">Kara delik</span></div>
-          <div class="gx-panel-row"><span class="gx-k">Düzlem</span><span class="gx-v">2D yörünge</span></div>
+          <div class="gx-panel-row"><span class="gx-k">Systems</span><span class="gx-v">${count}</span></div>
+          <div class="gx-panel-row"><span class="gx-k">Center</span><span class="gx-v">Black hole</span></div>
+          <div class="gx-panel-row"><span class="gx-k">Plane</span><span class="gx-v">2D orbit</span></div>
         </div>
       `;
       return;
@@ -202,43 +202,43 @@ export class UI {
   }
 
   private systemPanelHTML(sys: SystemData): string {
-    const star = STAR_CLASS_LABEL_TR[sys.starClass] ?? sys.starClass;
-    const economy = ECONOMY_LABEL_TR[sys.economy];
+    const star = STAR_CLASS_LABEL[sys.starClass] ?? sys.starClass;
+    const economy = ECONOMY_LABEL[sys.economy];
     const dot = colorCss(sys.starColor);
     return `
-      <div class="gx-panel-eyebrow">Sistem katmanı</div>
+      <div class="gx-panel-eyebrow">System layer</div>
       <div class="gx-panel-title"><span class="gx-row-dot" style="background:${dot}"></span>${escapeHtml(sys.name)}</div>
       <div class="gx-panel-sub">${star} · ${economy}</div>
       <p class="gx-panel-desc">${escapeHtml(sys.description)}</p>
       <div class="gx-panel-grid">
-        <div class="gx-panel-row"><span class="gx-k">Sınıf</span><span class="gx-v">${star}</span></div>
-        <div class="gx-panel-row"><span class="gx-k">Ekonomi</span><span class="gx-v">${economy}</span></div>
-        <div class="gx-panel-row"><span class="gx-k">Gezegenler</span><span class="gx-v">${sys.planets.length}</span></div>
+        <div class="gx-panel-row"><span class="gx-k">Class</span><span class="gx-v">${star}</span></div>
+        <div class="gx-panel-row"><span class="gx-k">Economy</span><span class="gx-v">${economy}</span></div>
+        <div class="gx-panel-row"><span class="gx-k">Planets</span><span class="gx-v">${sys.planets.length}</span></div>
       </div>
     `;
   }
 
   private planetPanelHTML(p: PlanetData, sys: SystemData): string {
-    const tt = PLANET_TYPE_LABEL_TR[p.type] ?? p.type;
+    const tt = PLANET_TYPE_LABEL[p.type] ?? p.type;
     const dot = colorCss(p.primaryColor);
     const moonsLine = p.moons.length === 0
-      ? 'Yok'
+      ? 'None'
       : `${p.moons.length} (${p.moons.map((m) => escapeHtml(m.name.split(' ').pop() ?? '')).join(', ')})`;
     const riskCls = RISK_CLASS[p.risk];
     return `
-      <div class="gx-panel-eyebrow">Gezegen odağı</div>
+      <div class="gx-panel-eyebrow">Planet focus</div>
       <div class="gx-panel-title"><span class="gx-row-dot" style="background:${dot}"></span>${escapeHtml(p.name)}</div>
       <div class="gx-panel-sub">${tt} · ${escapeHtml(sys.name)}</div>
       <p class="gx-panel-desc">${escapeHtml(p.description)}</p>
       <div class="gx-panel-grid">
-        <div class="gx-panel-row"><span class="gx-k">Tür</span><span class="gx-v">${tt}</span></div>
-        <div class="gx-panel-row"><span class="gx-k">Boyut</span><span class="gx-v">${(p.radius / 0.55).toFixed(2)} × Dünya</span></div>
-        <div class="gx-panel-row"><span class="gx-k">Yıldıza uzaklık</span><span class="gx-v">${(p.orbitRadius / 6).toFixed(2)} AU</span></div>
-        <div class="gx-panel-row"><span class="gx-k">Sıcaklık</span><span class="gx-v">${p.temperatureC} °C</span></div>
-        <div class="gx-panel-row"><span class="gx-k">Kaynak</span><span class="gx-v">${escapeHtml(p.resource)}</span></div>
-        <div class="gx-panel-row"><span class="gx-k">Risk</span><span class="gx-v"><span class="gx-risk gx-risk-${riskCls}">${RISK_LABEL_TR[p.risk]}</span></span></div>
-        <div class="gx-panel-row"><span class="gx-k">Halka</span><span class="gx-v">${p.hasRings ? 'Var' : 'Yok'}</span></div>
-        <div class="gx-panel-row"><span class="gx-k">Uydular</span><span class="gx-v">${moonsLine}</span></div>
+        <div class="gx-panel-row"><span class="gx-k">Type</span><span class="gx-v">${tt}</span></div>
+        <div class="gx-panel-row"><span class="gx-k">Size</span><span class="gx-v">${(p.radius / 0.55).toFixed(2)} × Earth</span></div>
+        <div class="gx-panel-row"><span class="gx-k">Distance</span><span class="gx-v">${(p.orbitRadius / 6).toFixed(2)} AU</span></div>
+        <div class="gx-panel-row"><span class="gx-k">Temperature</span><span class="gx-v">${p.temperatureC} °C</span></div>
+        <div class="gx-panel-row"><span class="gx-k">Resource</span><span class="gx-v">${escapeHtml(p.resource)}</span></div>
+        <div class="gx-panel-row"><span class="gx-k">Risk</span><span class="gx-v"><span class="gx-risk gx-risk-${riskCls}">${RISK_LABEL[p.risk]}</span></span></div>
+        <div class="gx-panel-row"><span class="gx-k">Rings</span><span class="gx-v">${p.hasRings ? 'Yes' : 'No'}</span></div>
+        <div class="gx-panel-row"><span class="gx-k">Moons</span><span class="gx-v">${moonsLine}</span></div>
       </div>
     `;
   }
@@ -249,7 +249,7 @@ export class UI {
     let items: { id: string; name: string; meta: string; dot: string; selected: boolean; onClick: () => void }[] = [];
 
     if (layer.kind === 'galaxy') {
-      // Galaksi katmanında liste yok — ekran galaksinin kendisi olsun
+      // No list on the galaxy layer — the screen is the galaxy itself
       this.objectList.style.display = 'none';
       this.objectList.innerHTML = '';
       return;
@@ -262,11 +262,11 @@ export class UI {
         this.objectList.innerHTML = '';
         return;
       }
-      title = `${sys.data.name} — gezegenler`;
+      title = `${sys.data.name} — planets`;
       items = sys.data.planets.map((p) => ({
         id: p.id,
         name: p.name,
-        meta: PLANET_TYPE_LABEL_TR[p.type] ?? p.type,
+        meta: PLANET_TYPE_LABEL[p.type] ?? p.type,
         dot: colorCss(p.primaryColor),
         selected: layer.kind === 'planet' && layer.planetId === p.id,
         onClick: () => this.navigate({ kind: 'planet', systemId: sys.data.id, planetId: p.id }),

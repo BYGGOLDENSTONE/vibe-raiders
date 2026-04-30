@@ -43,7 +43,7 @@ function makeSystemName(rng: Rng): string {
     return `${prefix}-${num}`;
   }
   const base = rng.pick(ROMANTIC_NAMES);
-  const tail = rng.bool(0.55) ? ' Sistemi' : ` ${rng.pick(['Çekirdeği', 'Kuşağı', 'Hattı', 'Kapısı'])}`;
+  const tail = rng.bool(0.55) ? ' System' : ` ${rng.pick(['Core', 'Belt', 'Line', 'Gate'])}`;
   return `${base}${tail}`;
 }
 
@@ -54,7 +54,7 @@ function makePlanetName(rng: Rng, systemName: string, index: number, isRomanticS
     return `${given}${suf}`;
   }
   // tech style: SystemName + roman or letter
-  const stripped = systemName.replace(/ (Sistemi|Çekirdeği|Kuşağı|Hattı|Kapısı)$/, '');
+  const stripped = systemName.replace(/ (System|Core|Belt|Line|Gate)$/, '');
   return `${stripped} ${ROMAN[index] ?? String(index + 1)}`;
 }
 
@@ -98,13 +98,13 @@ const PLANET_TYPES_BY_ZONE: Record<'inner' | 'mid' | 'outer', PlanetType[]> = {
 // --- Lore -------------------------------------------------------------------
 
 const RESOURCES_BY_TYPE: Record<PlanetType, string[]> = {
-  rocky:  ['Demir', 'Titanyum', 'Nikel', 'Bakır'],
-  ocean:  ['Su', 'Gıda', 'Hidrojen'],
-  gas:    ['Yakıt', 'Helyum-3', 'Hidrojen'],
-  ice:    ['Kristal', 'Donmuş gaz', 'Su'],
-  lava:   ['Plazma', 'Enerji', 'Volkanik metal'],
-  desert: ['Silikon', 'Cam', 'Nadir mineral'],
-  toxic:  ['Kimyasal', 'Asit', 'Eksotik gaz'],
+  rocky:  ['Iron', 'Titanium', 'Nickel', 'Copper'],
+  ocean:  ['Water', 'Food', 'Hydrogen'],
+  gas:    ['Fuel', 'Helium-3', 'Hydrogen'],
+  ice:    ['Crystal', 'Frozen gas', 'Water'],
+  lava:   ['Plasma', 'Energy', 'Volcanic metal'],
+  desert: ['Silicon', 'Glass', 'Rare mineral'],
+  toxic:  ['Chemical', 'Acid', 'Exotic gas'],
 };
 
 const ECONOMY_BY_DOMINANT_TYPE: Record<PlanetType, EconomyKind[]> = {
@@ -118,45 +118,45 @@ const ECONOMY_BY_DOMINANT_TYPE: Record<PlanetType, EconomyKind[]> = {
 };
 
 const SYSTEM_DESC_TEMPLATES: Record<EconomyKind, string[]> = {
-  'colony-core':     ['Yaşanabilir kuşağı geniş, kararlı bir koloni çekirdeği.', 'Erken yerleşimcilerin tutunduğu, ılıman kuşaklı sistem.'],
-  'science-line':    ['Soğuk ışıklı, az gezegenli bir araştırma hattı.', 'Sessiz yıldızı altında dönen ileri laboratuvar sistemi.'],
-  'trade-hub':       ['Yakın rota kavşağına oturmuş, hareketli bir ticaret düğümü.', 'Birden fazla geçidi kesen, canlı bir ticaret durağı.'],
-  'frontier-mining': ['Sınırda ham kaynak değeri yüksek bir madencilik sistemi.', 'Karanlık ve kompakt; ucuz ama çetin bir maden hattı.'],
-  'tourism-belt':    ['Parlak renkli yörüngeleriyle bilinen turizm kuşağı.', 'Görsel zenginliğiyle ünlü, yoğun yolcu trafiği taşıyan sistem.'],
-  'industrial':      ['Yoğun rafinerileriyle ağır endüstri merkezi.', 'Atmosferi her zaman kor halinde, üretim odaklı sistem.'],
-  'military':        ['Sıkı yörünge ağıyla korunan askeri üs.', 'Filo manevralarına uygun, yüksek alarm seviyesindeki sistem.'],
-  'lost-colony':     ['Eski yerleşimcilerin terk ettiği, kayıp koloni sistemi.', 'Hatalardan ders kalmış, sessizce dönen unutulmuş sistem.'],
-  'empty':           ['Harita üzerinde adı geçen ama aslında ıssız sistem.', 'Yıldızı dışında pek bir şey barındırmayan boş sistem.'],
+  'colony-core':     ['A stable colony core with a wide habitable belt.', 'A temperate-belt system where early settlers took root.'],
+  'science-line':    ['A cold-lit research line with few planets.', 'An advanced laboratory system spinning under a quiet star.'],
+  'trade-hub':       ['A bustling trade node sitting on a busy route junction.', 'A lively trade stop intersecting several travel lanes.'],
+  'frontier-mining': ['A mining system on the frontier, rich in raw resources.', 'Dark and compact — a cheap but punishing mining line.'],
+  'tourism-belt':    ['A tourism belt known for its brightly colored orbits.', 'A system famous for its visual splendor and heavy passenger traffic.'],
+  'industrial':      ['A heavy industrial hub packed with refineries.', 'A production-focused system with a perpetually glowing atmosphere.'],
+  'military':        ['A military base ringed by tight orbital defenses.', 'A high-alert system shaped for fleet maneuvers.'],
+  'lost-colony':     ['A lost colony abandoned by its original settlers.', 'A forgotten system spinning quietly, lessons learned and left behind.'],
+  'empty':           ['A system named on the map but in truth deserted.', 'An empty system holding little more than its star.'],
 };
 
 const PLANET_DESC_TEMPLATES: Record<PlanetType, string[]> = {
   rocky: [
-    'Kayalık yüzeyi maden damarlarıyla örülü, sade ama kazançlı dünya.',
-    'İnce atmosferi altında metal-zengin platolar uzanan bir gezegen.',
+    'A plain but profitable world, its rocky crust laced with ore veins.',
+    'A planet of metal-rich plateaus stretching beneath a thin atmosphere.',
   ],
   ocean: [
-    'Mavi okyanusları ve dengeli iklimiyle yaşam taşıyan bir dünya.',
-    'Sığ denizleri turkuaz parlayan, ılıman kuşaklı parlak gezegen.',
+    'A life-bearing world of blue oceans and a balanced climate.',
+    'A bright temperate-belt planet, its shallow seas glowing turquoise.',
   ],
   gas: [
-    'Geniş bantları ve devasa fırtınalarıyla bilinen yakıt deposu.',
-    'Yörüngesinde uydu ve istasyon ağı barındırmaya uygun gaz devi.',
+    'A fuel reservoir famous for wide bands and colossal storms.',
+    'A gas giant whose orbit easily hosts moons and station networks.',
   ],
   ice: [
-    'Buz kabuğunun altında nadir kimyasal rezervler barındıran soğuk dünya.',
-    'Kristal yansımalı kuzey ve güney kalkanları olan donmuş gezegen.',
+    'A cold world cradling rare chemical reserves under a shell of ice.',
+    'A frozen planet with crystal-bright northern and southern shields.',
   ],
   lava: [
-    'Aktif yüzeyi lav nehirleriyle damarlanmış, enerji açısından zengin dünya.',
-    'Yıldızına çok yakın yörüngede pişen, plazma sızdıran kor gezegen.',
+    'An energy-rich world threaded with rivers of lava across an active surface.',
+    'A glowing planet baking in close orbit, leaking plasma into space.',
   ],
   desert: [
-    'Kum okyanusları ve uzun gölgeli kanyonlarla yarılmış kuru dünya.',
-    'Nadir mineral damarlarını saklayan, kavurucu ekvatorlu çöl gezegeni.',
+    'A dry world cut by sand oceans and long-shadowed canyons.',
+    'A desert planet hiding rare mineral veins beneath a scorching equator.',
   ],
   toxic: [
-    'Yoğun zehirli atmosferi altında saklanan eksotik kimyasal dünya.',
-    'Yeşilimsi sis bulutları arasında dönen, korumalı yaşam destekleyen gezegen.',
+    'A world of exotic chemistry hidden under a dense, poisonous atmosphere.',
+    'A planet supporting shielded life among greenish veils of fog.',
   ],
 };
 

@@ -125,7 +125,6 @@ Orbit math:
 | desert | 0.4 – 1.2   | Silicon / Glass / Rare mineral     |
 | toxic  | 0.4 – 1.2   | Chemical / Acid / Exotic gas       |
 
-(Resource label strings are currently Turkish in `generation.ts` — pending migration.)
 
 Each planet additionally carries:
 
@@ -159,7 +158,7 @@ Determined from the dominant planet type:
 | desert        | Frontier Mining / Industrial / Lost Colony          |
 | toxic         | Military / Science Line / Lost Colony               |
 
-Each system also gets a 1-line description from a per-economy pool. (English-pending.)
+Each system also gets a 1-line description from a per-economy pool.
 
 ### Naming
 
@@ -167,7 +166,7 @@ Each system also gets a 1-line description from a per-economy pool. (English-pen
   `Trappist-…`, `NGC-…`, `TYC-…`, `Ross-…`, `Tau Ceti-…`
 - ~50% **romantic**: `Solara`, `Nacre`, `Mirage`, `Aetheria`, `Vela`,
   `Ortis`, `Caelum`, `Pyra`, `Halcyon`, etc., suffixed with one of
-  `Sistemi / Çekirdeği / Kuşağı / Hattı / Kapısı` (Turkish; pending migration).
+  `System / Core / Belt / Line / Gate`.
 
 Planets in romantic systems get given names (`Aster Prime`, `Ember`,
 `Velora`); tech systems get `<system> I/II/III/…`.
@@ -293,7 +292,6 @@ view sees stars as ~5 px points + halo).
   view hides it because 200 entries swamp the screen).
 - **Bottom-center hint bar** — controls.
 
-(All copy currently Turkish. Pending migration to English.)
 
 ### Labels (`labels.ts`)
 
@@ -347,20 +345,9 @@ maps that to the appropriate navigate.
 
 ## 7. Open work / next-session checklist
 
-1. **Migrate UI / runtime strings to English.** Files affected:
-   - `src/galaxy/ui.ts` — breadcrumb labels, switcher button text,
-     panel eyebrows ("Galaksi katmanı" etc.), hint copy, panel rows
-   - `src/galaxy/generation.ts`:
-     - resource arrays (`RESOURCES_BY_TYPE` is Turkish)
-     - system suffix list (`Sistemi / Çekirdeği / Kuşağı / Hattı / Kapısı`)
-     - description templates (`SYSTEM_DESC_TEMPLATES`, `PLANET_DESC_TEMPLATES`)
-   - `src/galaxy/types.ts` — `RiskLevel` is fine; risk **labels** in
-     `ui.ts` are Turkish
-   - Page `<title>` in `index.html`
-   - `src/style.css` is English-safe; no changes needed.
-2. **Lock the gameplay design with the user before writing any logic.**
+1. **Lock the gameplay design with the user before writing any logic.**
    Incremental empire — economy, build queues, multiplayer relay — all TBD.
-3. **PartyKit relay** is referenced in `package.json` scripts but no
+2. **PartyKit relay** is referenced in `package.json` scripts but no
    server has been written yet. `npm run party:dev` will fail until
    `partykit/server.ts` exists.
 

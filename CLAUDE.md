@@ -1,8 +1,9 @@
-# Game Jam — Vibe Jam 2026
+# The Vibecoder's Guide to the Galaxy
 
+> **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 1 (galaxy map) complete. Gameplay layer not started — will be built on top of the simulation in the next session.
+> **Status:** Wave 1 (galaxy map) complete + runtime strings migrated to English. Gameplay layer not started — will be built on top of the simulation in the next session.
 
 ---
 
@@ -10,7 +11,7 @@
 
 **Incremental space empire — multiplayer.**
 
-The galaxy you see now is the playable map. The game loop, economy, and multiplayer relay haven't been wired yet. The next session will pick up here, migrate UI strings to English, then add gameplay on top.
+The galaxy you see now is the playable map. The game loop, economy, and multiplayer relay haven't been wired yet. The next session will lock the gameplay design and add the game loop on top.
 
 ---
 
@@ -32,8 +33,7 @@ Full parameter reference and architecture in **`docs/GALAXY.md`**.
 
 1. Read this file end-to-end and `docs/GALAXY.md`.
 2. `git log --oneline -10` to see recent history.
-3. **First thing:** runtime UI is currently Turkish. Migrate all user-facing strings to English (see `docs/GALAXY.md` → "Open work" for the file list).
-4. Then lock the gameplay design with the user (incremental empire — economy, build queues, multiplayer relay) before coding any logic.
+3. Lock the gameplay design with the user (incremental empire — economy, build queues, multiplayer relay) before coding any logic.
 
 ---
 
