@@ -17,10 +17,37 @@
 
 ---
 
+## Current game direction (locked after planning)
+
+Build **Portal Empires**: a **shared-galaxy multiplayer incremental** where 16 players grow visible empires inside the same procedural galaxy in one browser tab. The wow factor we are chasing from jurors is **"how is this even running in HTML?"** — driven by shared multiplayer state, AAA-jam procedural visuals (Three.js + postprocessing + custom shaders), and trajectory-broadcast netcode. Incremental gameplay is the substrate, not the headline.
+
+Core fantasy: spawn into a populated galaxy, grow your sector, see other players' empires bloom in real time, open bilateral trade routes with neighbors, and use the Vibe Jam portal as the galactic wormhole and social spawn point.
+
+Read these planning docs before gameplay implementation **in this order**:
+
+1. `docs/VISION.md` — product thesis, the "how is this in HTML?" pitch, scope limits.
+2. `docs/GAME_DESIGN.md` — core loop, resources (Credits + Ore), shared sectors, cross-player routes, galactic events.
+3. `docs/UI_UX_DESIGN.md` — sector + galactic-map views, panel layout, visual polish rules.
+4. `docs/MULTIPLAYER_ECONOMY.md` — three-tier state model, trajectory broadcast, time sync, validation, PartyKit footguns.
+5. `docs/TECH_STACK.md` — library list, shader recipes, postprocessing chain, performance budget, AVOID list.
+6. `docs/IMPLEMENTATION_PLAN.md` — wave-by-wave order and acceptance checks.
+
+High-level wave order (revised — multiplayer-first):
+
+1. Wave 0 — Lock contracts (types, EventMap, protocol channels, time-sync handshake) and install the tech stack (postprocessing, troika-three-text, @three.ez/instanced-mesh, vite-plugin-glsl).
+2. Wave 1 — Shared galaxy 3D: procedural nebula, starfield, 100 planets from seed, planet/wormhole shaders, two tabs see each other's empires before any economy.
+3. Wave 2 — Local economy on top: Credits + Ore, upgrades, internal trade routes with cargo trajectory broadcast.
+4. Wave 3 — UI shell with visual polish (postprocessing, troika labels, identity-color borders).
+5. Wave 4 — Cross-player trade routes (bilateral, gradient arcs, consent flow).
+6. Wave 5 — Galactic map view, leaderboard polish, galactic events.
+7. Wave 6 — Tune first 10 minutes, synth audio, build/deploy.
+
+---
+
 ## Locked-in tech rules
 
 - **3D** — Three.js (WebGL only, no WebGPU). 100% procedural — NO Blender / external assets / textures. Geometry + shaders + lighting only.
-- **Multiplayer** — PartyKit relay (Cloudflare Workers). Client-authoritative position broadcast at 10 Hz. Hub = `'hub-1'` room.
+- **Multiplayer** — PartyKit relay (Cloudflare Workers). Single shared galaxy in `'hub-1'` room, 16 players. Three-tier state model (galaxy seed = server, empire snapshots = client-authoritative + clamped, cargo ships = trajectory-broadcast computed locally). Disable WebSocket Hibernation for `hub-1`. See `docs/MULTIPLAYER_ECONOMY.md`.
 - **Bundler** — Vite + TypeScript (strict, `verbatimModuleSyntax`, `noUnused*`, `erasableSyntaxOnly`).
 - **ECS-lite** — every gameplay object is an `Entity` (tags + components + Object3D). Systems run per frame on a `World`. Event bus for cross-module communication.
 - **Mandatory widget** — `<script async src="https://vibej.am/2026/widget.js"></script>` in `index.html`. Do not remove.
