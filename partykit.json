@@ -1,6 +1,7 @@
 {
   "$schema": "https://www.partykit.io/schema.json",
-  "name": "vibe-raiders",
+  "name": "vibecoders-guide-to-the-galaxy",
   "main": "partykit/server.ts",
+  "serve": "dist",
   "compatibilityDate": "2024-12-01"
 }
