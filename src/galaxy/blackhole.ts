@@ -14,8 +14,10 @@ export interface BlackHoleHandle {
 
 export function makeBlackHole(): BlackHoleHandle {
   const group = new THREE.Group();
-  const inner = 160.0;
-  const outer = 900.0;
+  // W9 — supermassive scale-up to match the 28k galaxy disk. Disk inner/outer
+  // grew ~2.7×; the rest (core sphere, halo) follows the same ratios as before.
+  const inner = 400.0;
+  const outer = 2400.0;
 
   // Black core (slightly larger than inner radius to occlude what's behind)
   const coreGeo = new THREE.SphereGeometry(inner * 0.9, 48, 48);

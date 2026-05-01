@@ -233,6 +233,10 @@ export default class GalaxyServer implements Party.Server {
     for (const candidate of preferred) {
       if (!candidate) continue;
       if (taken.has(candidate)) continue;
+      // W9 — only main galaxy systems are valid spawn slots. Defensive check
+      // since rogue clients could otherwise nominate satellite-galaxy systems
+      // that should only be reachable via the Intergalactic Bridge unlock.
+      if (!candidate.startsWith('milky-way:')) continue;
       chosen = candidate;
       break;
     }

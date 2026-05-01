@@ -393,8 +393,18 @@ export class UpgradePanel {
 
 // --- Helpers ---------------------------------------------------------------
 
+// W9 — costs in the late game (Phase 9 intergalactic milestone) hit the
+// hundreds-of-millions / billions range, so the upgrade panel needs the same
+// suffix ladder as the HUD chips. Below 10K shows the raw integer because
+// players still count Tier I-II costs by hand.
 function fmtCost(v: number): string {
-  return v < 10 ? v.toFixed(1) : Math.ceil(v).toString();
+  if (v < 10) return v.toFixed(1);
+  if (v < 10_000) return Math.ceil(v).toString();
+  if (v < 1_000_000) return `${(v / 1_000).toFixed(1)}K`;
+  if (v < 1_000_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+  if (v < 1e12) return `${(v / 1e9).toFixed(2)}B`;
+  if (v < 1e15) return `${(v / 1e12).toFixed(2)}T`;
+  return `${(v / 1e15).toFixed(2)}Q`;
 }
 
 function canAffordNow(have: ResourceBag, cost: Partial<Record<ResourceKey, number>>): boolean {

@@ -1,13 +1,15 @@
 import * as THREE from 'three';
-import type { GalaxyHandle } from './galaxy';
+import type { UniverseHandle } from './galaxy';
 import type { LayerState } from './types';
 
-export type LabelKind = 'system' | 'planet' | 'moon';
+export type LabelKind = 'system' | 'planet' | 'moon' | 'galaxy';
 
 interface Label {
   id: string;        // unique within scene: e.g. "sys:abc"
   kind: LabelKind;
+  // For 'galaxy' labels, systemId is empty and galaxyId carries the link.
   systemId: string;
+  galaxyId: string;
   planetId: string | null;
   moonId: string | null;
   worldNode: THREE.Object3D;
@@ -56,17 +58,35 @@ export class LabelManager {
     this.camera = camera;
   }
 
-  build(galaxy: GalaxyHandle): void {
+  build(universe: UniverseHandle): void {
     // Wipe
     for (const l of this.labels) l.el.remove();
     this.labels = [];
 
-    for (const [, sys] of galaxy.systems) {
+    // W9 — one label per playable galaxy, anchored at its bulge so universe
+    // view shows the galaxies' names + tinted dots.
+    for (const [, gh] of universe.galaxies) {
+      this.addLabel({
+        id: `gx:${gh.data.id}`,
+        kind: 'galaxy',
+        systemId: '',
+        galaxyId: gh.data.id,
+        planetId: null,
+        moonId: null,
+        worldNode: gh.bulge.group,
+        text: gh.data.name,
+        color: rgbCss(gh.data.palette.bulgeColor),
+      });
+    }
+
+    for (const [, sys] of universe.systems) {
+      const galaxyId = universe.systemToGalaxy.get(sys.data.id) ?? '';
       // System label, attached to star core
       this.addLabel({
         id: `sys:${sys.data.id}`,
         kind: 'system',
         systemId: sys.data.id,
+        galaxyId,
         planetId: null,
         moonId: null,
         worldNode: sys.star.core,
@@ -79,6 +99,7 @@ export class LabelManager {
           id: `pl:${sys.data.id}:${p.data.id}`,
           kind: 'planet',
           systemId: sys.data.id,
+          galaxyId,
           planetId: p.data.id,
           moonId: null,
           worldNode: p.body,
@@ -90,6 +111,7 @@ export class LabelManager {
             id: `mn:${sys.data.id}:${p.data.id}:${m.data.id}`,
             kind: 'moon',
             systemId: sys.data.id,
+            galaxyId,
             planetId: p.data.id,
             moonId: m.data.id,
             worldNode: m.mesh,
@@ -105,6 +127,7 @@ export class LabelManager {
     id: string;
     kind: LabelKind;
     systemId: string;
+    galaxyId: string;
     planetId: string | null;
     moonId: string | null;
     worldNode: THREE.Object3D;
@@ -116,6 +139,7 @@ export class LabelManager {
     el.dataset.id = p.id;
     el.dataset.kind = p.kind;
     el.dataset.systemId = p.systemId;
+    if (p.galaxyId) el.dataset.galaxyId = p.galaxyId;
     if (p.planetId) el.dataset.planetId = p.planetId;
     if (p.moonId) el.dataset.moonId = p.moonId;
 
@@ -135,6 +159,7 @@ export class LabelManager {
       id: p.id,
       kind: p.kind,
       systemId: p.systemId,
+      galaxyId: p.galaxyId,
       planetId: p.planetId,
       moonId: p.moonId,
       worldNode: p.worldNode,
@@ -222,13 +247,16 @@ export class LabelManager {
 
     this.camera.updateMatrixWorld();
 
-    // Galaxy view LOD: only the N nearest system labels render — keeps the screen readable.
+    // Galaxy view LOD: only the N nearest system labels render — keeps the
+    // screen readable. Filter is per-galaxy: only systems in the active galaxy
+    // count, otherwise distant remote-galaxy stars compete for label slots.
     let galaxyAllowed: Set<string> | null = null;
     if (layer.kind === 'galaxy') {
-      const N = 18;
+      const N = 24;
       const cands: { id: string; d: number }[] = [];
       for (const l of this.labels) {
         if (l.kind !== 'system') continue;
+        if (layer.galaxyId && l.galaxyId !== layer.galaxyId) continue;
         l.worldNode.getWorldPosition(this.vTmp);
         cands.push({ id: l.id, d: this.vTmp.distanceToSquared(camPos) });
       }
@@ -274,15 +302,24 @@ export class LabelManager {
   }
 
   private shouldShow(l: Label, layer: LayerState): boolean {
+    if (layer.kind === 'universe') {
+      // Universe view: only galaxy labels.
+      return l.kind === 'galaxy';
+    }
     if (layer.kind === 'galaxy') {
+      // System labels in the active galaxy. Other galaxies' labels also show
+      // (faintly) so the player can always navigate back across galaxies.
+      if (l.kind === 'galaxy') return l.galaxyId !== layer.galaxyId;
       return l.kind === 'system';
     }
     if (layer.kind === 'system') {
+      if (l.kind === 'galaxy') return false;
       if (l.kind === 'system') return true; // distant + active
       if (l.kind === 'planet') return l.systemId === layer.systemId;
       return false; // moons hidden in system view
     }
     // planet view
+    if (l.kind === 'galaxy') return false;
     if (l.kind === 'system') return l.systemId === layer.systemId; // single system label, will fade
     if (l.kind === 'planet') return l.systemId === layer.systemId;
     if (l.kind === 'moon') return l.systemId === layer.systemId && l.planetId === layer.planetId;
@@ -290,9 +327,19 @@ export class LabelManager {
   }
 
   private opacityFor(l: Label, layer: LayerState, dist: number): number {
+    if (layer.kind === 'universe') {
+      // Galaxy labels are always visible — they're sparse and the player needs
+      // them to navigate. Soft fade only at extreme distances.
+      const o = THREE.MathUtils.smoothstep(550000 - dist, 0, 200000);
+      return o * 0.95;
+    }
     if (layer.kind === 'galaxy') {
-      // Visible across the whole galaxy (~12k radius)
-      const o = THREE.MathUtils.smoothstep(14000 - dist, 0, 4000);
+      // System labels within the active galaxy fade by camera distance.
+      // Other-galaxy bulge labels stay faint so they don't dominate.
+      if (l.kind === 'galaxy') {
+        return 0.45;
+      }
+      const o = THREE.MathUtils.smoothstep(35000 - dist, 0, 12000);
       return o * 0.95;
     }
     if (layer.kind === 'system') {

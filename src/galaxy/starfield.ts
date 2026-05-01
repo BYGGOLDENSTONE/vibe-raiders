@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { Rng } from './rng';
 import { NEBULA_VERT, NEBULA_FRAG } from './shaders';
+import { buildDistantGalaxies, type DistantGalaxiesHandle } from './distant-galaxies';
 
 export interface BackgroundHandle {
   skydome: THREE.Mesh;
   starLayers: THREE.Points[];
+  distantGalaxies: DistantGalaxiesHandle;
 }
 
 function buildStarLayer(count: number, radius: number, sizeMin: number, sizeMax: number, seed: number): THREE.Points {
@@ -75,8 +77,9 @@ function buildStarLayer(count: number, radius: number, sizeMin: number, sizeMax:
 }
 
 export function buildBackground(): BackgroundHandle {
-  // Skydome with nebula shader
-  const skyGeo = new THREE.SphereGeometry(24000, 32, 32);
+  // W9 — skydome scaled 24k → 70k so the 28k galaxy disk has room to breathe
+  // inside the nebula. Star layers shifted in step.
+  const skyGeo = new THREE.SphereGeometry(70000, 32, 32);
   const skyMat = new THREE.ShaderMaterial({
     vertexShader: NEBULA_VERT,
     fragmentShader: NEBULA_FRAG,
@@ -87,10 +90,12 @@ export function buildBackground(): BackgroundHandle {
   skydome.frustumCulled = false;
 
   const starLayers = [
-    buildStarLayer(3200, 18000, 1.0, 2.4, 991),  // far
-    buildStarLayer(1600, 12000, 1.4, 3.0, 7311), // mid
-    buildStarLayer(700,   8000, 1.6, 3.8, 1029), // near
+    buildStarLayer(3200, 55000, 1.0, 2.4, 991),  // far
+    buildStarLayer(1600, 40000, 1.4, 3.0, 7311), // mid
+    buildStarLayer(700,  28000, 1.6, 3.8, 1029), // near
   ];
 
-  return { skydome, starLayers };
+  const distantGalaxies = buildDistantGalaxies();
+
+  return { skydome, starLayers, distantGalaxies };
 }

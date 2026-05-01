@@ -127,6 +127,11 @@ function buildCatalogue(): UpgradeNode[] {
     { id: 'unlock-observatory', name: 'Wormhole Observatory',cost: { metal: 250000,     water: 150000,     crystal: 100000 },                                                                          flag: 'wormhole-observatory',  desc: 'Map seams in hyperspace.',                  requiresUnlock: 'system-expansion' },
     { id: 'unlock-transit',     name: 'Wormhole Transit',    cost: { metal: 2000000,    water: 1500000,    crystal: 1000000 },                                                                         flag: 'wormhole-transit',      desc: 'Travel to a neighbour system.',             requiresUnlock: 'wormhole-observatory' },
     { id: 'unlock-trade',       name: 'Trade Hub',           cost: { metal: 50000000,   water: 30000000,   crystal: 20000000, silicon: 10000000, gas: 10000000, plasma: 10000000, chemical: 10000000 },flag: 'trade-hub',             desc: 'Open the galactic exchange.',               requiresUnlock: 'wormhole-transit' },
+    // W9 — endgame intergalactic milestone. Cost is 2× Trade Hub on the main
+    // resources + small contribution from the rare-side stockpile. By this
+    // point the player has T2 income (×100 per planet) so the seemingly-huge
+    // numbers fill in within minutes of buying Trade Hub.
+    { id: 'unlock-intergalactic', name: 'Intergalactic Bridge', cost: { metal: 100000000, water: 60000000, crystal: 40000000, silicon: 5000000, gas: 5000000, plasma: 5000000, chemical: 5000000 }, flag: 'intergalactic-bridge', desc: 'Bridge the void between galaxies (T3 ×10K).', requiresUnlock: 'trade-hub' },
   ];
   let prev: string = 'core';
   for (let i = 0; i < expSteps.length; i++) {

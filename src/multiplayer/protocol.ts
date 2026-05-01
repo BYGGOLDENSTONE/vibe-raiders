@@ -10,6 +10,11 @@ export interface PlayerProfile {
 // Public, broadcastable slice of EmpireState. Resources, unlockedNodes and
 // upgrade tree state are intentionally NOT here — those stay private per W6
 // design ("upgrade'ler gözükmesin, claim'ler gözüksün").
+//
+// W9 — system / planet IDs are now galaxy-prefixed ("milky-way:sys-...",
+// "andromeda:sys-..."). claimedSystems keys can carry tier 1-4: 1 = home,
+// 2 = in-galaxy wormhole, 3 = intergalactic bridge, 4 = wormhole within an
+// extra galaxy (deferred). Schema unchanged from W7.
 export interface PublicEmpireState {
   systemId: string | null;
   ownedPlanets: string[];

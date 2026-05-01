@@ -83,7 +83,8 @@ export const MOON_OUTPOST_INCOME = { resource: 'crystal' as ResourceKey, rate: 5
 export const SYNERGY_PER_PLANET = 0.2;
 
 // Each new system tier multiplies that system's planets by this base.
-// Home (T1) ×1, T2 ×100, T3 ×10,000, T4 ×1,000,000.
+// Home (T1) ×1, T2 (in-galaxy wormhole) ×100, T3 (intergalactic bridge) ×10,000,
+// T4 (wormhole inside an extra galaxy) ×1,000,000.
 export const SYSTEM_TIER_BASE = 100;
 
 // W4-C balance: bumped 1000 → 1500 so Phase 3 (Space Elevator @ 1500 metal)
@@ -111,7 +112,8 @@ export type UnlockFlag =
   | 'system-expansion'
   | 'wormhole-observatory'
   | 'wormhole-transit'
-  | 'trade-hub';
+  | 'trade-hub'
+  | 'intergalactic-bridge';
 
 // What buying a single node does. One effect per node — small and simple.
 export type UpgradeEffect =
@@ -165,12 +167,12 @@ export interface EmpireState {
   lastSavedAt: number;
 }
 
-// W4-C bumped from v5 — homeClaimed flow + outpostMoonId state + rebalance.
-// Old saves auto-discard so every player picks up the new economy + claim flow.
-export const STORAGE_KEY_SOLO = 'vibecoder.empire.v6';
+// W9 — bumped from v6: galaxy-prefixed system IDs + new claimedSystems entries
+// for T3/T4. Old saves auto-discard so the multi-galaxy bootstrap takes hold.
+export const STORAGE_KEY_SOLO = 'vibecoder.empire.v7';
 // W6 — multiplayer keeps a separate save so the solo career isn't disturbed
-// when the player drops into a shared galaxy and back.
-export const STORAGE_KEY_MP = 'vibecoder.empire.mp.v1';
+// when the player drops into a shared galaxy and back. Also bumped for W9.
+export const STORAGE_KEY_MP = 'vibecoder.empire.mp.v2';
 
 // Game mode determines which save slot is used and whether multiplayer state
 // is wired up. Selected on the start screen and threaded through Empire +

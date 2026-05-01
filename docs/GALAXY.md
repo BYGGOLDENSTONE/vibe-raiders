@@ -1,7 +1,9 @@
 # Galaxy Simulation — Parameter Reference & Architecture
 
-This is the playable map produced by Wave 1. The game loop, economy, and
-multiplayer will be built **on top of** this — no rewrites planned.
+This is the playable map. Wave 1 built the original single-galaxy disc; Wave 9
+expanded it into a six-galaxy universe with a new top-level `'universe'` layer.
+The game loop, economy, and multiplayer all sit **on top of** this — every
+gameplay change ships as a wave-level addition.
 
 Everything here is procedural: no textures, no external assets, no Blender.
 All bodies are rendered with custom GLSL fragment shaders.
@@ -10,17 +12,40 @@ All bodies are rendered with custom GLSL fragment shaders.
 
 ## 1. High-level architecture
 
-A **single Three.js scene** with a **single perspective camera**. The three
+A **single Three.js scene** with a **single perspective camera**. The four
 "layers" the user navigates between are camera states, not separate scenes.
 
 ```ts
-type LayerKind = 'galaxy' | 'system' | 'planet';
+type LayerKind = 'universe' | 'galaxy' | 'system' | 'planet';
 type LayerState = {
   kind: LayerKind;
+  galaxyId: string | null;   // W9 — null only in 'universe' view
   systemId: string | null;
   planetId: string | null;
 };
 ```
+
+### W9 multi-galaxy
+
+The scene now contains **six playable galaxies** plus six cosmetic background
+billboards. The main galaxy ("Milky Way") sits at origin and is where every
+player spawns; five satellite galaxies (Andromeda, Magellan, Sombrero,
+Pinwheel, Triangulum) sit at 100k-220k units away on different vectors with
+their own tilts. Each galaxy is generated with its own `GalaxyPalette` so
+star-class and planet-type weights differ — Andromeda is dominated by white-
+blue + blue-giant stars and ocean/gas worlds, Triangulum is mostly red dwarves
+with cold ice/toxic planets, etc.
+
+Each galaxy has a procedural log-spiral **bulge billboard** (`src/galaxy/bulge.ts`)
+that doubles as the universe-view click target. The bulge fades in past
+1.8× radius from the camera and fully bright past 6×, so it's invisible when
+the player is inside a galaxy looking at individual systems and brightly
+visible from universe view (camera at ~420k from origin).
+
+Wave 9 also bumped the main galaxy's scale to give the universe room to
+breathe: disc radius 10k → 28k, thickness 120 → 1800 (true 3D disc, not a
+flat plate edge-on), supermassive black hole inner/outer 160/900 → 400/2400,
+skydome 24k → 70k, camera far plane 38k → 600k.
 
 Held in `App.state`. Mutated only through `App.navigateTo(next)`, which
 fires a 1.4-second cinematic camera transition (easeInOutCubic on
@@ -28,11 +53,12 @@ position, distance, yaw, pitch) and rebuilds the UI panel.
 
 ### LOD by layer
 
-| Layer  | Visible bodies                                 | Camera default                                 |
-|--------|------------------------------------------------|------------------------------------------------|
-| galaxy | All star cores + glows + black hole + skydome  | distance **18000**, pitch **0.95**             |
-| system | Active system's planets + moons + orbit lines  | dynamic — `outerApoapsis × 1.55 + 24`          |
-| planet | Active system's planets (sibling planets visible) | `planetRadius × 4.5` (min 3.5)              |
+| Layer    | Visible bodies                                          | Camera default                                                |
+|----------|---------------------------------------------------------|---------------------------------------------------------------|
+| universe | All 6 galaxy bulges + cosmetic background galaxies      | distance **420000**, pitch **0.85**                           |
+| galaxy   | Active galaxy's stars + black hole + every other bulge  | `galaxy.radius × 1.8` (min 12000)                             |
+| system   | Active system's planets + moons + orbit lines           | dynamic — `outerApoapsis × 1.55 + 24`                         |
+| planet   | Active system's planets (sibling planets visible)       | `planetRadius × 4.5` (min 3.5)                                |
 
 Implemented via `setSystemDetail(systemHandle, full)`:
 
@@ -63,13 +89,15 @@ Pointer input:
 
 Distance limits (per layer):
 
-| Layer  | min        | max         |
-|--------|------------|-------------|
-| galaxy | 2400       | 24000       |
-| system | 14         | dynamic × 4 |
-| planet | radius × 1.6 | radius × 60 |
+| Layer    | min                       | max                          |
+|----------|---------------------------|------------------------------|
+| universe | 80000                     | 540000                       |
+| galaxy   | `galaxy.radius × 0.18`    | `dist × 1.6`                 |
+| system   | 14                        | dynamic × 4                  |
+| planet   | radius × 1.6              | radius × 60                  |
 
-Camera **far plane: 38000**, near plane: 0.05.
+Camera **far plane: 600000** (W9 — bumped from 38000 so the universe view
+can see the whole Local Group), near plane: 0.05.
 
 ---
 

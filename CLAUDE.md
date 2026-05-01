@@ -3,7 +3,7 @@
 > **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 8 complete — audio is live. WebAudio-synthesised SFX cover buy / annex / wormhole / trade / layer transition / click / error events; `Conquerer of the Universe.mp3` streams as background music through a music gain bus. Settings gear (bottom-right) opens a modal with Master / Music / SFX sliders + mute toggles, persisted to `vibecoder.audio.v1`. The audio context unlocks on the first user gesture (browser autoplay policy). Wave 7 — wormhole transit is live — once the home system is fully claimed and `wormhole-transit` is bought, an auto-targeted "Open Rift" banner offers the closest unclaimed system at T2 (×100 multiplier, 5M/3M/2M cost). On claim, every planet in the target system enters `ownedPlanets` in one shot, and a violet vortex shader spins at both the home and the new system's stars (visible in galaxy + system view, billboard'd toward the camera, owner-coloured). Galaxy view also draws thin additive lines between connected systems for self + every remote player. Trade Hub (`trade-hub`) adds an HUD button that auto-trades 20% of the player's most-abundant resource for half as much of their least-abundant resource at a 2:1 ratio. In MP the relay matches a counterpart with `tradeHubReady=true` and informs both sides; offline / solo / no-counterpart falls back to a "Galactic Exchange" NPC. 60 s client cooldown + 30 s server safety net. T2 stops at one second system per the W7 design — T3+ deferred.
+> **Status:** Wave 9 complete — multi-galaxy universe. The galaxy is now one of six in a "Local Group". Disk scaled up ×2.8 (radius 28 000), thickness 120 → 1800 so the disc reads as a true 3D structure, supermassive black hole inner/outer 160/900 → 400/2400, skydome 24k → 70k, camera far plane 38k → 600k. New `'universe'` LayerKind frames every galaxy from ~420k out — 5 satellite galaxies (Andromeda / Magellan / Sombrero / Pinwheel / Triangulum) generated with palette-driven star + planet weighting, each at its own world position 100k-220k from the main galaxy with a unique tilt. Each galaxy has a procedural log-spiral bulge billboard that fades in past 1.8× radius and is the universe-view click target. 6 cosmetic background-galaxy billboards still ride the skydome shell for extra "WOW the void is full" feel. New Phase 9 unlock — `intergalactic-bridge` (cost 100M/60M/40M MWC + 5M each of the rare four) — surfaces an "Intergalactic Bridge" banner once Trade Hub is unlocked. Bridge claims the closest extra galaxy's first rocky+moon system at T3 (×10K multiplier; cost 500M/300M/200M MWC + 50M each of the rare four), bulk-adding all its planets to ownedPlanets and drawing a long additive connection line across the universe view from home to T3. Number formatter extended through T/Q/Qa/Qi for the post-T3 economy. Save key bumped: solo `vibecoder.empire.v7`, MP `vibecoder.empire.mp.v2` (old saves discard). Server defensively rejects spawn claims for non-`milky-way:` systems.
 
 ---
 
@@ -257,6 +257,59 @@ The first audio pass. SFX are 100 % WebAudio-synthesised (no asset files), per t
 
 **Save:** new `localStorage` key `vibecoder.audio.v1`. Independent from the empire / session keys; clearing the change-profile session does not reset audio settings (intentional — the player's volume preference shouldn't snap back when they switch modes).
 
+### Wave 9 — multi-galaxy universe (this session)
+
+The "WOW how did they fit this in HTML" pass. The original ~10k-radius galaxy disc became one of six in a Local Group, with new gameplay (`intergalactic-bridge`) to actually visit the others. Headlines: scale-up of the main galaxy (×2.8 radius, real 3D thickness, bigger black hole), a new `'universe'` LayerKind that frames every galaxy from ~420k out, palette-driven generation so each galaxy looks distinct, intergalactic claim that bulk-adds a foreign galaxy's first system at T3 (×10K).
+
+**Scale + 3D pass:**
+
+- `generation.ts` — main galaxy radius 10k → 28k, inner cutout 1500 → 3500, thickness 120 → 1800 (true 3D disc, no longer a flat plate edge-on). Min separation 600 → 1700, buffer 140 → 400, cluster jitter scales with `radius × 0.24` so satellite galaxies still cluster correctly. Same 200 systems across the bigger disc → much more void between them.
+- `blackhole.ts` — disc inner/outer 160/900 → 400/2400, halo + core proportional. The supermassive feels properly cosmic now.
+- `starfield.ts` — skydome 24k → 70k, star layers 18k/12k/8k → 55k/40k/28k. Skydome still follows the camera so the player can never "fall out" of the void.
+- `app.ts` — camera far plane 38k → 600k for universe view. Galaxy-view camera distance is now derived from `galaxy.radius × 1.8` so smaller satellite galaxies frame tighter than the main 28k disc.
+
+**Universe data model:**
+
+- `types.ts` adds `GalaxyPalette` (star/planet weighting + arms/twist/thickness/inner-cutout/bulge+arm colours), `GalaxyData` (id+name+position+systems+radius+palette+tilt), `UniverseData` (`galaxies: GalaxyData[]`), and a new `'universe'` `LayerKind`. `LayerState` gains `galaxyId: string | null`.
+- `generation.ts` exports `generateUniverse(seed)` — main galaxy at origin + 5 satellite galaxies (Andromeda 18k radius blue-white giants, Magellan 9k red-dwarf irregular, Sombrero 14k thick gas-giant disc, Pinwheel 16k 6-arm grand-design, Triangulum 12k cold ice/toxic) at varied 100k-220k positions and tilts. Per-galaxy seed = `mainSeed + offset` so every player sees the same universe.
+- `weightedPick<T>(rng, candidates, weights)` drives both star class + planet type picks. Default weight = 1; palette overrides bias the rolls without reshuffling the whole RNG sequence (deterministic per seed/palette).
+- System IDs are now galaxy-prefixed (`milky-way:sys-XXX`, `andromeda:sys-XXX`) so each galaxy lives in its own namespace.
+
+**Universe scene + LOD:**
+
+- `galaxy.ts` rewritten: `UniverseHandle` wraps multiple `GalaxyHandle` instances, exposes a flat `systems: Map<string, SystemHandle>` and `systemToGalaxy: Map<string, string>` so existing code paths (labels, picking, empire layer) keep working with a single `.get(systemId)`.
+- Each `GalaxyHandle.root` is a `THREE.Group` positioned at `galaxy.position` in universe space. Only the main galaxy holds the supermassive black hole.
+- `bulge.ts` (new) — per-galaxy procedural log-spiral billboard sized at `galaxy.radius × 2.4`, tinted by palette. Fade band 1.8× → 6× radius from camera so the bulge is invisible when the player enters that galaxy's view (real systems take over) and fully bright in universe view. Each bulge carries an invisible `pickProxy` sphere as the universe-view click target.
+- `distant-galaxies.ts` (new) — 6 cosmetic spiral-galaxy billboards on a 55k shell that follows the camera. These are pure decor — never clickable — but they fill the sky in every direction.
+- Per-frame: each galaxy's root spins ~0.010 rad/sec (so satellite galaxies rotate too, on their own axes). `updateUniverse` walks every galaxy and calls `updateSystem` only on the active one (LOD).
+
+**Universe navigation:**
+
+- `picking.ts` — universe view raycasts every bulge `pickProxy`; galaxy view raycasts the active galaxy's stars + every other galaxy's bulge (so you can hop directly between galaxies); system view also keeps other-galaxy bulges as click targets.
+- `labels.ts` — adds `'galaxy'` LabelKind, one per playable galaxy anchored to its bulge group. Universe view renders only galaxy labels; galaxy view fades them slightly so they don't dominate the 24-system LOD list (bumped from 18 because the bigger disc has room for more readable names).
+- `ui.ts` — breadcrumb prepends `Universe`, switcher gains a `Universe` button. Detail panel renders a "Local Group" overview in universe view and a per-galaxy summary in galaxy view.
+- `app.ts` `layerPreset('universe')` puts the camera at distance 420k, pitch 0.85; min/max 80k/540k.
+
+**W9 gameplay — Intergalactic Bridge:**
+
+- New unlock node `intergalactic-bridge` in `upgrades.ts`, prereq `unlock-trade` (Phase 8). Cost 100M MWC + 5M for each rare resource — a hefty milestone but reachable within minutes of buying Trade Hub if the player has T2 income flowing.
+- `Empire.canStartIntergalactic()` / `nextIntergalacticTarget()` / `claimNextIntergalactic()` — picks the satellite galaxy closest to the main galaxy AND its best rocky+moon system. Cost is fixed `INTERGALACTIC_CLAIM_COST` (500M/300M/200M MWC + 50M each for the rare four). On claim, every planet in the target system is bulk-added to `ownedPlanets`, system tier set to 3 → `SYSTEM_TIER_BASE^(3-1) = ×10 000` income multiplier. T3 is by far the biggest single-purchase income jump in the game.
+- `EmpireCtx.nextIntergalactic` + new banner variant — gold + violet "Intergalactic Bridge · T3 ×10K" banner with a "Bridge" button that flies the player into the freshly claimed extra-galaxy system.
+- T4 (wormhole within an extra galaxy) deferred for a future wave — `claimedSystems` schema + `tierOf` already support it, but no UI flow yet.
+- Connection lines extended: `wormholeSystemIds()` returns only T2 systems; `intergalacticSystemIds()` returns T3+. App's connection-line rebuild draws additive lines between (home, T2) and (home, T3) pairs at the universe level (via `scene.add` instead of galaxy.root) so they span across galaxies. Visible in galaxy + universe view.
+- Vortex shader from W7 is reused for T3 systems too — same swirl, owner-tinted, billboarded toward camera.
+- Number formatter (`hud.ts`, `app.ts`, `panel.ts`) extended through T/Q/Qa/Qi/Sx so the post-T3 economy displays cleanly.
+
+**Multiplayer:**
+
+- `partykit/server.ts` defensive check — `claim-system` only accepts candidates with the `milky-way:` prefix. Every player still spawns in the main galaxy regardless of which mode. Resources stay private, T3/T4 ownership broadcasts via the same `claimedSystems` field that already carried T2 (no protocol shape change needed).
+- `Empire.eligibleSpawnSystemIds()` filters to main galaxy systems only.
+- Save key bumped: solo `vibecoder.empire.v6` → `v7`, MP `vibecoder.empire.mp.v1` → `mp.v2`. Old saves discard so the new universe layout takes hold cleanly.
+
+**Files touched:** `src/galaxy/types.ts` (UniverseData / GalaxyData / GalaxyPalette / 'universe' LayerKind / `galaxyId` on LayerState), `src/galaxy/generation.ts` (rewrote — `generateUniverse` + `weightedPick` + 6 palettes), `src/galaxy/galaxy.ts` (rewrote — `UniverseHandle` wrapping `GalaxyHandle` instances), `src/galaxy/bulge.ts` (new), `src/galaxy/distant-galaxies.ts` (new), `src/galaxy/blackhole.ts` (scale-up), `src/galaxy/starfield.ts` (scale-up + distantGalaxies wiring), `src/galaxy/labels.ts` (galaxy labels + multi-galaxy LOD), `src/galaxy/picking.ts` ('galaxy' kind + multi-galaxy targets), `src/galaxy/ui.ts` (universe breadcrumb / switcher / panel + intergalactic banner), `src/galaxy/app.ts` (universe layer support — preset / target / navigate / pick / loop / wormholes / connection lines / camera far plane), `src/empire/types.ts` (`intergalactic-bridge` unlock + storage keys v7 / mp.v2), `src/empire/upgrades.ts` (`unlock-intergalactic` Phase-9 node), `src/empire/empire.ts` (UniverseData support + intergalactic methods + tier-aware helpers), `src/empire/hud.ts` (extended formatNumber Q/Qa/Qi), `src/empire/panel.ts` (extended fmtCost), `src/multiplayer/protocol.ts` (W9 doc note on prefixed IDs + tier 3/4), `partykit/server.ts` (main-galaxy spawn filter), `src/style.css` (intergalactic banner variant + galaxy label class), `CLAUDE.md` (this entry).
+
+**Save:** solo `vibecoder.empire.v7`, MP `vibecoder.empire.mp.v2`. Old saves auto-discard so the multi-galaxy bootstrap takes hold.
+
 ### Known issue — solved
 
 The "single-resource progression deadlock" from W3 is gone:
@@ -312,23 +365,25 @@ gamejam/
 │   ├── start-screen.ts             Wave-6 — Solo / Multiplayer chooser + profile picker
 │   ├── portal.ts                   Wave-6 — Vibe Jam webring in/out + return-portal pill
 │   ├── style.css                   global UI + empire styles
-│   ├── galaxy/                     Wave-1 simulation
-│   │   ├── app.ts                  orchestrator + render loop (also hosts Empire tick + MP wiring + W7 wormhole vortex / connection lines / trade flow)
+│   ├── galaxy/                     Wave-1 simulation + Wave-9 universe layer
+│   │   ├── app.ts                  orchestrator + render loop (Empire tick + MP wiring + W7 wormhole vortex / connection lines / trade + W9 universe nav)
 │   │   ├── camera-controller.ts
-│   │   ├── types.ts
+│   │   ├── types.ts                + Wave-9 GalaxyPalette / GalaxyData (id+position+palette+tilt) / UniverseData / 'universe' LayerKind
 │   │   ├── rng.ts
-│   │   ├── generation.ts
+│   │   ├── generation.ts           + Wave-9 generateUniverse() — main + 5 satellite galaxies, palette-driven star/planet weighting
 │   │   ├── shaders.ts
-│   │   ├── starfield.ts
-│   │   ├── blackhole.ts            includes `portalPickProxy` for the W6-H portal click target
+│   │   ├── starfield.ts            + Wave-9 distantGalaxies (cosmetic billboard shell)
+│   │   ├── blackhole.ts            Wave-9 scaled (inner 400, outer 2400)
 │   │   ├── star.ts
 │   │   ├── planet.ts
 │   │   ├── system.ts
-│   │   ├── galaxy.ts
-│   │   ├── labels.ts               + remote-owner markers (W6-F)
-│   │   ├── picking.ts              + 'portal' kind for the black hole proxy
+│   │   ├── galaxy.ts               Wave-9 — UniverseHandle wraps multiple GalaxyHandle, flat system lookup
+│   │   ├── distant-galaxies.ts     Wave-9 — 6 cosmetic spiral-galaxy billboards on the skydome shell
+│   │   ├── bulge.ts                Wave-9 — per-galaxy procedural bulge billboard + universe-view click proxy
+│   │   ├── labels.ts               + Wave-9 galaxy labels for universe view
+│   │   ├── picking.ts              + Wave-9 'galaxy' kind for bulge picking
 │   │   ├── wormhole.ts             Wave-7 — vortex shader billboard at connected systems
-│   │   └── ui.ts                   breadcrumb, layer switcher, detail panel, annex banner (incl. W7 wormhole variant)
+│   │   └── ui.ts                   breadcrumb / layer switcher / detail panel / annex banner (W7 wormhole + W9 intergalactic variants)
 │   ├── empire/                     Wave-2/3 gameplay layer
 │   │   ├── types.ts                ResourceKey, EmpireState, UpgradeNode, GameMode + storage keys
 │   │   ├── upgrades.ts             ~150-node skill tree catalogue (grouped into chains by panel.ts)
@@ -380,8 +435,9 @@ gamejam/
 | **W6** | ✅ Complete. PartyKit relay + start screen + per-slot spawn allocation + auto-annex banner + public ownership viz + Vibe Jam portal in/out. Debug panel removed. |
 | **W7** | ✅ Complete. Wormhole annex banner (`5M/3M/2M cost`, closest-unclaimed target, T2 ×100 multiplier on bulk-claim) + violet vortex shader at every connected system + galaxy-view connection lines per owner + Trade Hub auto-trade (2:1 most-abundant → least-abundant, 60 s cooldown, MP relay matchmaking with NPC fallback). |
 | **W8** | ✅ Complete. Procedural WebAudio SFX (buy / annex / wormhole / trade / layer transition / click / error) + MP3 background music streamed through a music gain bus + bottom-right gear button opening a Master / Music / SFX volume modal. Persists to `vibecoder.audio.v1`. Music auto-plays after the first user gesture (browser autoplay policy). |
+| **W9** | ✅ Complete. Multi-galaxy universe — main galaxy scaled ×2.8 (radius 28k, true 3D thickness), supermassive black hole 4× bigger, new `'universe'` LayerKind framing 6 playable galaxies (Milky Way + Andromeda + Magellan + Sombrero + Pinwheel + Triangulum) with per-palette star/planet weighting + per-galaxy bulge billboards + 6 cosmetic background billboards. New `intergalactic-bridge` Phase-9 unlock and banner claims the closest extra galaxy's first system at T3 (×10K). Number formatter extended through Q/Qa/Qi. Save key bumped to v7 / mp.v2. Server defensively filters spawn claims to `milky-way:` systems. |
 
-Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live constants: `PLANET_INCOME`, `SYNERGY_PER_PLANET = 0.2`, `SYSTEM_TIER_BASE = 100`, `MOON_OUTPOST_INCOME = 5/s crystal`, `BASE_STORAGE_CAP = 1500`, `PROD_MUL_PER_TIER`, milestone costs in `src/empire/upgrades.ts` `expSteps`. W5 annex: `SYSTEM_PLANET_CLAIM_BASE = {metal:5000, water:3000, crystal:2000}`, `SYSTEM_PLANET_CLAIM_GROWTH = 1.6` in `src/empire/empire.ts`. W7 wormhole: `WORMHOLE_CLAIM_COST = {metal:5M, water:3M, crystal:2M}` in `src/empire/empire.ts`. W7 trade: 20% give / 50% return (2:1 ratio), 60 s client cooldown / 30 s server in `partykit/server.ts:TRADE_COOLDOWN_MS`. Wave 4-B visuals: `DOME_DIAMETER_FRAC`, `TETHER_RADIUS_FRAC`, `SHUTTLE_COUNT`, `SHUTTLE_BASE_SPEED` in `src/empire/moon-outpost.ts`.
+Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live constants: `PLANET_INCOME`, `SYNERGY_PER_PLANET = 0.2`, `SYSTEM_TIER_BASE = 100`, `MOON_OUTPOST_INCOME = 5/s crystal`, `BASE_STORAGE_CAP = 1500`, `PROD_MUL_PER_TIER`, milestone costs in `src/empire/upgrades.ts` `expSteps`. W5 annex: `SYSTEM_PLANET_CLAIM_BASE = {metal:5000, water:3000, crystal:2000}`, `SYSTEM_PLANET_CLAIM_GROWTH = 1.6` in `src/empire/empire.ts`. W7 wormhole: `WORMHOLE_CLAIM_COST = {metal:5M, water:3M, crystal:2M}` in `src/empire/empire.ts`. W7 trade: 20% give / 50% return (2:1 ratio), 60 s client cooldown / 30 s server in `partykit/server.ts:TRADE_COOLDOWN_MS`. Wave 4-B visuals: `DOME_DIAMETER_FRAC`, `TETHER_RADIUS_FRAC`, `SHUTTLE_COUNT`, `SHUTTLE_BASE_SPEED` in `src/empire/moon-outpost.ts`. W9 intergalactic: `INTERGALACTIC_CLAIM_COST` in `src/empire/empire.ts`; satellite-galaxy positions / radii / palettes in `src/galaxy/generation.ts:generateUniverse`; bulge fade band 1.8×-6× radius in `src/galaxy/bulge.ts:updateBulge`.
 
 ---
 

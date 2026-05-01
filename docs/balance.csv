@@ -105,3 +105,10 @@ SingleStarRate,1 rocky planet metal/s @ everything maxed,-,/s,~5700000,~350,was 
 SingleStarRate,1 rocky planet metal/s @ early game (Drone Fleet I-III),-,/s,~30,~5,more honest pacing
 HomeSystemFullClaim,7 planets fully claimed metal/s peak,-,/s,~14000000,~2300,still huge but T2 (×100) pumps it to 230K/s for endgame
 T2SystemRate,1 T2 system planet metal/s peak,-,/s,~570000000,~35000,Trade Hub 50M / 35K = 24 minutes per resource
+,,,,,,
+W9 Multi-galaxy,,,,,,
+Milestones,Intergalactic Bridge,-,cost,N/A,100M+60M+40M MWC + 5M each rare,Phase 9 unlock — gates the intergalactic banner
+Claim,Intergalactic system claim,-,cost,N/A,500M+300M+200M MWC + 50M each rare,bulk-adds entire foreign system at T3
+Tier,T3 multiplier,-,multiplier,N/A,10000,SYSTEM_TIER_BASE^(3-1) = 100^2
+T3SystemRate,1 T3 planet metal/s peak after maxed empire,-,/s,N/A,~3500000,T3 pumps single-planet income to ~3.5M/s with full upgrades
+T3SystemFullClaim,5-7 planet T3 system metal/s peak,-,/s,N/A,~24500000,~24.5M/s — late-game economy is back in the millions/s

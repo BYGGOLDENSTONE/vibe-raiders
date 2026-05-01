@@ -1,6 +1,6 @@
 // Empire — runtime state, production tick, save/load, and node purchases.
 
-import type { GalaxyData, PlanetData, SystemData } from '../galaxy/types';
+import type { GalaxyData, PlanetData, SystemData, UniverseData } from '../galaxy/types';
 import {
   BASE_STORAGE_CAP,
   MOON_OUTPOST_INCOME,
@@ -31,6 +31,20 @@ const WORMHOLE_CLAIM_COST: Partial<ResourceBag> = {
   crystal: 2_000_000,
 };
 
+// W9 — intergalactic claim cost. Half a billion on the main resources + light
+// secondary contribution. T3 multiplier (×10K) is so massive that even one
+// planet there will dwarf the home system's output, so the cost has to feel
+// like a real achievement.
+const INTERGALACTIC_CLAIM_COST: Partial<ResourceBag> = {
+  metal:    500_000_000,
+  water:    300_000_000,
+  crystal:  200_000_000,
+  gas:       50_000_000,
+  plasma:    50_000_000,
+  silicon:   50_000_000,
+  chemical:  50_000_000,
+};
+
 // W7 — single trade swap. Same shape used by previewTrade (UI hover) and
 // executeTrade (the actual mutation), so banner code can render both with
 // the same formatter.
@@ -57,14 +71,22 @@ export interface EmpireMetrics {
 export class Empire {
   state: EmpireState;
   mode: GameMode;
-  private galaxy: GalaxyData;
+  // W9 — empire now operates on the full universe (multi-galaxy). The legacy
+  // single-galaxy lookups still work because the helper functions transparently
+  // walk every galaxy in the universe.
+  private universe: UniverseData;
+  // Convenience handle to the main galaxy where every player spawns. Used by
+  // the spawn-eligibility list so satellite-galaxy systems aren't offered as
+  // valid starting positions.
+  private mainGalaxy: GalaxyData;
   private seed: number;
   private storageKey: string;
   private listeners = new Set<() => void>();
   private saveAccum = 0;
 
-  constructor(galaxy: GalaxyData, seed: number, mode: GameMode = 'solo') {
-    this.galaxy = galaxy;
+  constructor(universe: UniverseData, seed: number, mode: GameMode = 'solo') {
+    this.universe = universe;
+    this.mainGalaxy = universe.galaxies[0]!;
     this.seed = seed;
     this.mode = mode;
     this.storageKey = storageKeyFor(mode);
@@ -100,10 +122,12 @@ export class Empire {
   }
 
   // Pick a deterministic eligible homeworld (rocky + at least one moon) from
-  // the galaxy and write the home/owned/system fields. Solo only — MP uses
-  // bootstrapInSystem() with a server-assigned spawn system instead.
+  // the main galaxy and write the home/owned/system fields. Solo only — MP
+  // uses bootstrapInSystem() with a server-assigned spawn system instead.
   private bootstrapHomeworld(): void {
-    const pick = pickStartingPlanet(this.galaxy);
+    // W9 — every player spawns in the main galaxy regardless of which extras
+    // exist. Satellites are intergalactic destinations, not spawn slots.
+    const pick = pickStartingPlanet(this.mainGalaxy);
     if (!pick) return; // ~impossible with ~200 systems, but keep dormant if it happens
     this.state.homeClaimed = true;
     this.state.homeSystemId = pick.system.id;
@@ -117,7 +141,8 @@ export class Empire {
   // returns false if the system has no eligible planet (shouldn't happen
   // because the client only nominates systems that pass the same filter).
   bootstrapInSystem(systemId: string): boolean {
-    const sys = this.galaxy.systems.find((s) => s.id === systemId);
+    // W9 — only main galaxy systems are valid spawn points.
+    const sys = this.mainGalaxy.systems.find((s) => s.id === systemId);
     if (!sys) return false;
     let temperate: PlanetData | null = null;
     let any: PlanetData | null = null;
@@ -145,10 +170,10 @@ export class Empire {
   // Eligibility list used by App to build the "preferred systems" list it
   // sends to the relay during a claim handshake. Returns systemIds in galaxy
   // order so every client agrees on the priority order — server's first-fit
-  // pick lands on a stable assignment.
+  // pick lands on a stable assignment. W9 — main galaxy only.
   eligibleSpawnSystemIds(): string[] {
     const out: string[] = [];
-    for (const s of this.galaxy.systems) {
+    for (const s of this.mainGalaxy.systems) {
       for (const p of s.planets) {
         if (p.type === 'rocky' && p.moons.length > 0) { out.push(s.id); break; }
       }
@@ -160,12 +185,17 @@ export class Empire {
 
   homeSystem(): SystemData | null {
     if (!this.state.homeClaimed) return null;
-    return this.galaxy.systems.find((s) => s.id === this.state.homeSystemId) ?? null;
+    return findSystem(this.universe, this.state.homeSystemId);
   }
   homePlanet(): PlanetData | null {
     if (!this.state.homeClaimed) return null;
     const sys = this.homeSystem();
     return sys?.planets.find((p) => p.id === this.state.homePlanetId) ?? null;
+  }
+  // W9 — main galaxy reference, used by app.ts to colour the home galaxy
+  // bulge and render galaxy-specific markers.
+  homeGalaxyId(): string {
+    return this.mainGalaxy.id;
   }
   // True for any rocky planet that has at least one moon — eligible homeworld.
   // Used by the auto-pick at empire creation and by W6 (multiplayer) to decide
@@ -185,7 +215,7 @@ export class Empire {
     if (!this.hasUnlock('system-expansion')) return false;
     if (!this.state.homeClaimed) return false;
     if (this.state.ownedPlanets.includes(planet.id)) return false;
-    const sys = findSystemOf(this.galaxy, planet.id);
+    const sys = findSystemOf(this.universe, planet.id);
     return !!sys && sys.id === this.state.homeSystemId;
   }
 
@@ -297,17 +327,19 @@ export class Empire {
   // Pick the unclaimed system closest to the home system (galaxy 3D distance).
   // Returns null when wormhole-transit isn't bought yet, when home isn't set,
   // or when the player has already claimed their second system.
+  // W9 — picks within the home galaxy only; intergalactic claims have their
+  // own banner / unlock chain.
   nextWormholeTarget(): SystemData | null {
     if (!this.canStartWormhole()) return null;
     const home = this.homeSystem();
     if (!home) return null;
+    const homeGalaxy = findGalaxyOfSystem(this.universe, home.id);
+    if (!homeGalaxy) return null;
     const [hx, hy, hz] = home.position;
     let best: SystemData | null = null;
     let bestD = Infinity;
-    for (const s of this.galaxy.systems) {
+    for (const s of homeGalaxy.systems) {
       if (s.id === home.id) continue;
-      // Skip systems already claimed by this empire — there shouldn't be any
-      // in MVP since wormhole locks itself out after one claim, but cheap.
       if (this.state.claimedSystems[s.id]) continue;
       const dx = s.position[0] - hx;
       const dy = s.position[1] - hy;
@@ -343,13 +375,105 @@ export class Empire {
     return true;
   }
 
-  // Returns every system this empire has claimed at T2 or higher. Used by the
-  // galaxy-view connection line renderer (W7-C) and any UI that wants to list
-  // wormhole-connected systems.
+  // Returns every system this empire has claimed at T2 specifically (in-galaxy
+  // wormhole). Excludes T3/T4 — those come from the intergalactic chain and
+  // are rendered as separate connections.
   wormholeSystemIds(): string[] {
     const out: string[] = [];
     for (const [sysId, tier] of Object.entries(this.state.claimedSystems)) {
-      if (sysId !== this.state.homeSystemId && tier >= 2) out.push(sysId);
+      if (sysId !== this.state.homeSystemId && tier === 2) out.push(sysId);
+    }
+    return out;
+  }
+
+  // --- W9: Intergalactic Bridge --------------------------------------------
+  //
+  // After Trade Hub, the player can buy `intergalactic-bridge` to access the
+  // satellite galaxies. The first claim picks the closest extra galaxy and
+  // marks ONE of its rocky+moon systems at T3 (×10K multiplier). All of that
+  // system's planets enter ownedPlanets in one shot, which makes T3 feel like
+  // an actual milestone. T4 (wormhole within an extra galaxy) deferred.
+
+  canStartIntergalactic(): boolean {
+    if (!this.hasUnlock('intergalactic-bridge')) return false;
+    if (this.hasClaimedIntergalacticSystem()) return false;
+    return true;
+  }
+
+  hasClaimedIntergalacticSystem(): boolean {
+    for (const tier of Object.values(this.state.claimedSystems)) {
+      if (tier >= 3) return true;
+    }
+    return false;
+  }
+
+  // Pick the satellite galaxy closest to the home galaxy AND its best
+  // rocky+moon system (so the T3 income lands on a planet whose moons can host
+  // the moon-outpost dome and wear the player's home-system visuals well).
+  // Returns the (galaxy, system) tuple or null when no claim is available.
+  nextIntergalacticTarget(): { galaxy: GalaxyData; system: SystemData } | null {
+    if (!this.canStartIntergalactic()) return null;
+    const homeGalaxy = this.universe.galaxies[0];
+    if (!homeGalaxy) return null;
+    const [hx, hy, hz] = homeGalaxy.position;
+
+    let bestGalaxy: GalaxyData | null = null;
+    let bestD = Infinity;
+    for (let i = 1; i < this.universe.galaxies.length; i++) {
+      const g = this.universe.galaxies[i]!;
+      // Skip galaxies that already have a T3+ system claimed — a future wave
+      // can extend this to multiple T3s; for now one per galaxy.
+      const hasT3InG = g.systems.some((s) => (this.state.claimedSystems[s.id] ?? 0) >= 3);
+      if (hasT3InG) continue;
+      const dx = g.position[0] - hx;
+      const dy = g.position[1] - hy;
+      const dz = g.position[2] - hz;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < bestD) { bestD = d; bestGalaxy = g; }
+    }
+    if (!bestGalaxy) return null;
+
+    // Pick best rocky+moon system in that galaxy, falling back to first system.
+    let bestSys: SystemData | null = null;
+    for (const s of bestGalaxy.systems) {
+      const hasRocky = s.planets.some((p) => p.type === 'rocky' && p.moons.length > 0);
+      if (hasRocky) { bestSys = s; break; }
+    }
+    if (!bestSys) bestSys = bestGalaxy.systems[0] ?? null;
+    if (!bestSys) return null;
+    return { galaxy: bestGalaxy, system: bestSys };
+  }
+
+  intergalacticClaimCost(): Partial<ResourceBag> {
+    return INTERGALACTIC_CLAIM_COST;
+  }
+
+  // Claim the next intergalactic target as a T3 system. Bulk-adds every planet
+  // in the target system to ownedPlanets so the ×10K tier multiplier kicks in
+  // immediately — by far the biggest single-purchase income jump in the game.
+  claimNextIntergalactic(): boolean {
+    const target = this.nextIntergalacticTarget();
+    if (!target) return false;
+    const cost = this.intergalacticClaimCost();
+    if (!canAfford(this.state.resources, cost)) return false;
+    subtractCost(this.state.resources, cost);
+    this.state.claimedSystems[target.system.id] = 3;
+    for (const p of target.system.planets) {
+      if (!this.state.ownedPlanets.includes(p.id)) {
+        this.state.ownedPlanets.push(p.id);
+      }
+    }
+    this.save();
+    this.emit();
+    return true;
+  }
+
+  // Returns every system claimed at T3 or higher — used by the galaxy / universe
+  // connection-line renderer to draw intergalactic bridges.
+  intergalacticSystemIds(): string[] {
+    const out: string[] = [];
+    for (const [sysId, tier] of Object.entries(this.state.claimedSystems)) {
+      if (tier >= 3) out.push(sysId);
     }
     return out;
   }
@@ -416,12 +540,14 @@ export class Empire {
   // be tier-scaled and the renderer knows where to attach the dome.
   outpostMoonContext(): { planet: PlanetData; systemId: string } | null {
     if (!this.state.outpostMoonId) return null;
-    for (const s of this.galaxy.systems) {
-      for (const p of s.planets) {
-        if (!this.state.ownedPlanets.includes(p.id)) continue;
-        for (const m of p.moons) {
-          if (m.id === this.state.outpostMoonId) {
-            return { planet: p, systemId: s.id };
+    for (const g of this.universe.galaxies) {
+      for (const s of g.systems) {
+        for (const p of s.planets) {
+          if (!this.state.ownedPlanets.includes(p.id)) continue;
+          for (const m of p.moons) {
+            if (m.id === this.state.outpostMoonId) {
+              return { planet: p, systemId: s.id };
+            }
           }
         }
       }
@@ -462,7 +588,7 @@ export class Empire {
   // computation. Mirrors the planet-income + moon-outpost logic in computeMetrics.
   private producesResource(k: ResourceKey): boolean {
     for (const pid of this.state.ownedPlanets) {
-      const p = findPlanet(this.galaxy, pid);
+      const p = findPlanet(this.universe, pid);
       if (!p) continue;
       const inc = PLANET_INCOME[p.type];
       if (inc.primary.resource === k || inc.secondary.resource === k) return true;
@@ -512,10 +638,10 @@ export class Empire {
     // 1. Per-planet baseline income (primary + secondary), scaled by the
     //    system-tier multiplier of whichever system this planet belongs to.
     for (const pid of this.state.ownedPlanets) {
-      const p = findPlanet(this.galaxy, pid);
+      const p = findPlanet(this.universe, pid);
       if (!p) continue;
       planetCount++;
-      const sys = findSystemOf(this.galaxy, pid);
+      const sys = findSystemOf(this.universe, pid);
       const tier = sys ? this.tierOf(sys.id) : 1;
       const tierMul = Math.pow(SYSTEM_TIER_BASE, tier - 1);
 
@@ -590,7 +716,9 @@ export class Empire {
   }
 
   // System tier — home is implicit T1, claimed systems carry an explicit tier.
-  // Returns 1 for unknown / home / unclaimed-but-occupied systems.
+  // Returns 1 for unknown / home / unclaimed-but-occupied systems. Tiers run
+  // 1 (×1, home) → 2 (×100, in-galaxy wormhole) → 3 (×10K, intergalactic) →
+  // 4 (×1M, intra-foreign-galaxy wormhole, deferred for now).
   private tierOf(systemId: string): number {
     const explicit = this.state.claimedSystems[systemId];
     if (explicit && explicit > 0) return explicit;
@@ -645,7 +773,7 @@ export class Empire {
     if (!this.hasUnlock('moon-outpost')) return false;
     let valid = false;
     for (const pid of this.state.ownedPlanets) {
-      const p = findPlanet(this.galaxy, pid);
+      const p = findPlanet(this.universe, pid);
       if (!p) continue;
       if (p.moons.some((m) => m.id === moonId)) { valid = true; break; }
     }
@@ -728,19 +856,41 @@ function pickStartingPlanet(galaxy: GalaxyData): { system: SystemData; planet: P
   return temperateMatch ?? anyMatch;
 }
 
-function findPlanet(galaxy: GalaxyData, planetId: string): PlanetData | null {
-  for (const s of galaxy.systems) {
-    for (const p of s.planets) {
-      if (p.id === planetId) return p;
+function findPlanet(universe: UniverseData, planetId: string): PlanetData | null {
+  for (const g of universe.galaxies) {
+    for (const s of g.systems) {
+      for (const p of s.planets) {
+        if (p.id === planetId) return p;
+      }
     }
   }
   return null;
 }
 
-function findSystemOf(galaxy: GalaxyData, planetId: string): SystemData | null {
-  for (const s of galaxy.systems) {
-    for (const p of s.planets) {
-      if (p.id === planetId) return s;
+function findSystem(universe: UniverseData, systemId: string): SystemData | null {
+  for (const g of universe.galaxies) {
+    for (const s of g.systems) {
+      if (s.id === systemId) return s;
+    }
+  }
+  return null;
+}
+
+function findSystemOf(universe: UniverseData, planetId: string): SystemData | null {
+  for (const g of universe.galaxies) {
+    for (const s of g.systems) {
+      for (const p of s.planets) {
+        if (p.id === planetId) return s;
+      }
+    }
+  }
+  return null;
+}
+
+function findGalaxyOfSystem(universe: UniverseData, systemId: string): GalaxyData | null {
+  for (const g of universe.galaxies) {
+    for (const s of g.systems) {
+      if (s.id === systemId) return g;
     }
   }
   return null;

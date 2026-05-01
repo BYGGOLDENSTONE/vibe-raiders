@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { LayerState } from './types';
-import { generateGalaxy } from './generation';
-import { buildGalaxy, updateGalaxy, setActiveSystem, type GalaxyHandle } from './galaxy';
+import { generateUniverse } from './generation';
+import { buildUniverse, updateUniverse, setActiveSystem, type UniverseHandle } from './galaxy';
 import { CameraController } from './camera-controller';
 import { LabelManager } from './labels';
 import { Picker } from './picking';
@@ -57,7 +57,7 @@ export class App {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private controller: CameraController;
-  private galaxy: GalaxyHandle;
+  private universe: UniverseHandle;
   private labels: LabelManager;
   private picker: Picker;
   private ui: UI;
@@ -83,7 +83,7 @@ export class App {
   // enforces 30s as a safety net. Toasts pile up briefly on rapid trades.
   private tradeCooldownUntil = 0;
   private tradeToastLayer: HTMLDivElement | null = null;
-  private state: LayerState = { kind: 'galaxy', systemId: null, planetId: null };
+  private state: LayerState = { kind: 'galaxy', galaxyId: 'milky-way', systemId: null, planetId: null };
   private clock = new THREE.Clock();
   private canvas: HTMLCanvasElement;
   private overlay: HTMLDivElement;
@@ -118,17 +118,20 @@ export class App {
     this.labelLayer.className = 'gx-labels';
     this.overlay.appendChild(this.labelLayer);
 
-    // Scene + camera
+    // Scene + camera. W9 — far plane bumped from 38k → 600k so the universe
+    // view (camera at ~400k from origin) can still see distant galaxies.
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(55, host.clientWidth / host.clientHeight, 0.05, 38000);
+    this.camera = new THREE.PerspectiveCamera(55, host.clientWidth / host.clientHeight, 0.05, 600000);
 
     // Subtle ambient (most lighting is in planet shader)
     const ambient = new THREE.AmbientLight(0xffffff, 0.05);
     this.scene.add(ambient);
 
-    // Galaxy
-    const data = generateGalaxy(GALAXY_SEED);
-    this.galaxy = buildGalaxy(this.scene, data);
+    // W9 — universe with main galaxy + 5 satellite galaxies + cosmetic
+    // background discs. Build on the same seed so every player sees the same
+    // universe layout.
+    const data = generateUniverse(GALAXY_SEED);
+    this.universe = buildUniverse(this.scene, data);
 
     // Empire (gameplay state) — selects/loads home planet, starts the tick.
     // Mode flag drives the save-slot split so solo and multiplayer empires
@@ -137,17 +140,18 @@ export class App {
 
     // Camera + controller — start framed on the player's homeworld so first-
     // time players land in their empire instead of staring at the galaxy from
-    // 18 000 units out. Falls back to galaxy view only if bootstrap somehow
+    // 50 000 units out. Falls back to galaxy view only if bootstrap somehow
     // failed to claim a home planet.
     this.controller = new CameraController(this.camera, this.canvas);
+    const homeGid = this.empire.homeGalaxyId();
     const start: LayerState = this.empire.state.homeClaimed
-      ? { kind: 'planet', systemId: this.empire.state.homeSystemId, planetId: this.empire.state.homePlanetId }
-      : { kind: 'galaxy', systemId: null, planetId: null };
-    if (start.kind !== 'galaxy') {
-      setActiveSystem(this.galaxy, start.systemId);
+      ? { kind: 'planet', galaxyId: homeGid, systemId: this.empire.state.homeSystemId, planetId: this.empire.state.homePlanetId }
+      : { kind: 'galaxy', galaxyId: homeGid, systemId: null, planetId: null };
+    if (start.kind !== 'galaxy' && start.kind !== 'universe') {
+      setActiveSystem(this.universe, start.systemId);
     }
     // resolveTarget reads world positions, so push the freshly-built matrices.
-    this.galaxy.root.updateMatrixWorld(true);
+    this.universe.root.updateMatrixWorld(true);
     const startPreset = this.layerPreset(start);
     const startTarget = this.resolveTarget(start);
     this.controller.trackedNode = startTarget.node;
@@ -162,7 +166,7 @@ export class App {
 
     // Labels
     this.labels = new LabelManager(this.labelLayer, this.camera);
-    this.labels.build(this.galaxy);
+    this.labels.build(this.universe);
 
     // Picker
     this.picker = new Picker(this.camera);
@@ -178,7 +182,7 @@ export class App {
     this.updatePortalHint();
 
     // UI
-    this.ui = new UI(this.overlay, this.galaxy, (next) => this.navigateTo(next));
+    this.ui = new UI(this.overlay, this.universe, (next) => this.navigateTo(next));
     this.ui.setEmpireContext(this.buildEmpireCtx());
     this.refreshHomeMarkers();
     this.ui.render(this.state);
@@ -224,8 +228,14 @@ export class App {
       if (this.controller.isTransitioning()) return;
       const kind = target.dataset.kind ?? '';
       const sysId = target.dataset.systemId ?? '';
+      const galaxyIdAttr = target.dataset.galaxyId;
       const plId = target.dataset.planetId;
       const mnId = target.dataset.moonId;
+      // W9 — galaxy labels jump straight to galaxy view of the clicked galaxy.
+      if (kind === 'galaxy' && galaxyIdAttr) {
+        this.navigateTo({ kind: 'galaxy', galaxyId: galaxyIdAttr, systemId: null, planetId: null });
+        return;
+      }
       if (!sysId) return;
       // W4-E: moon-claim mode — the only thing a moon click does is claim
       // the outpost moon (when applicable). Otherwise moons aren't navigable.
@@ -234,10 +244,11 @@ export class App {
         sfxAnnex();
         return;
       }
+      const galaxyId = this.universe.systemToGalaxy.get(sysId) ?? null;
       if (kind === 'system') {
-        this.navigateTo({ kind: 'system', systemId: sysId, planetId: null });
+        this.navigateTo({ kind: 'system', galaxyId, systemId: sysId, planetId: null });
       } else if (kind === 'planet' && plId) {
-        this.navigateTo({ kind: 'planet', systemId: sysId, planetId: plId });
+        this.navigateTo({ kind: 'planet', galaxyId, systemId: sysId, planetId: plId });
       }
     });
 
@@ -273,12 +284,22 @@ export class App {
   }
 
   private layerPreset(layer: LayerState): LayerCamPreset {
+    if (layer.kind === 'universe') {
+      // W9 — frame the whole Local Group. Camera sits ~400k from origin so
+      // every galaxy bulge fits inside the frustum at 55° FOV.
+      return { distance: 420000, pitch: 0.85, minDist: 80000, maxDist: 540000 };
+    }
     if (layer.kind === 'galaxy') {
-      return { distance: 18000, pitch: 0.95, minDist: 2400, maxDist: 24000 };
+      // W9 — galaxy view distance scales with the active galaxy's radius so
+      // small satellites frame tighter than the main 28k disc.
+      const gh = layer.galaxyId ? this.universe.galaxies.get(layer.galaxyId) : null;
+      const radius = gh?.data.radius ?? 28000;
+      const dist = Math.max(radius * 1.8, 12000);
+      return { distance: dist, pitch: 0.95, minDist: Math.max(radius * 0.18, 2400), maxDist: dist * 1.6 };
     }
     if (layer.kind === 'system') {
       // Frame the whole system based on the outermost planet's apoapsis.
-      const sys = layer.systemId ? this.galaxy.systems.get(layer.systemId) : null;
+      const sys = layer.systemId ? this.universe.systems.get(layer.systemId) : null;
       let outer = 60;
       if (sys && sys.data.planets.length > 0) {
         for (const p of sys.data.planets) {
@@ -290,7 +311,7 @@ export class App {
       return { distance: dist, pitch: 0.55, minDist: 14, maxDist: dist * 4 };
     }
     // planet — frame the whole planet system (rings + moon apoapsis), not just the body.
-    const sys = layer.systemId ? this.galaxy.systems.get(layer.systemId) : null;
+    const sys = layer.systemId ? this.universe.systems.get(layer.systemId) : null;
     const planet = sys?.planets.find((p) => p.data.id === layer.planetId);
     const r = planet ? planet.data.radius : 0.6;
     let extent = r;
@@ -310,10 +331,18 @@ export class App {
   }
 
   private resolveTarget(layer: LayerState): { pos: THREE.Vector3; node: THREE.Object3D | null } {
-    if (layer.kind === 'galaxy') {
+    if (layer.kind === 'universe') {
+      // Universe view targets the centre of the Local Group (origin).
       return { pos: new THREE.Vector3(0, 0, 0), node: null };
     }
-    const sys = layer.systemId ? this.galaxy.systems.get(layer.systemId) : null;
+    if (layer.kind === 'galaxy') {
+      const gh = layer.galaxyId ? this.universe.galaxies.get(layer.galaxyId) : null;
+      if (!gh) return { pos: new THREE.Vector3(0, 0, 0), node: null };
+      const v = new THREE.Vector3();
+      gh.root.getWorldPosition(v);
+      return { pos: v, node: gh.root };
+    }
+    const sys = layer.systemId ? this.universe.systems.get(layer.systemId) : null;
     if (!sys) return { pos: new THREE.Vector3(0, 0, 0), node: null };
     if (layer.kind === 'system') {
       const v = new THREE.Vector3();
@@ -335,7 +364,8 @@ export class App {
   navigateTo(next: LayerState): void {
     if (this.controller.isTransitioning()) return;
     if (next.kind !== this.state.kind || next.systemId !== this.state.systemId
-        || next.planetId !== this.state.planetId) {
+        || next.planetId !== this.state.planetId
+        || next.galaxyId !== this.state.galaxyId) {
       sfxLayerTransition();
     }
 
@@ -343,7 +373,7 @@ export class App {
     const { pos, node } = this.resolveTarget(next);
 
     // Activate system immediately so its planets render during the fly
-    setActiveSystem(this.galaxy, next.systemId);
+    setActiveSystem(this.universe, next.systemId);
 
     // Track the destination node from the start of the transition. The
     // camera-controller refreshes the lerp endpoint each frame from the node's
@@ -364,18 +394,18 @@ export class App {
       },
     );
 
-    // For galaxy view, deactivate any active system
-    if (next.kind === 'galaxy') {
-      setActiveSystem(this.galaxy, null);
+    // For galaxy or universe view, deactivate any active system.
+    if (next.kind === 'galaxy' || next.kind === 'universe') {
+      setActiveSystem(this.universe, null);
     }
 
     this.state = next;
     this.ui.render(this.state);
     this.updatePortalHint();
-    // W7 — connection lines only render in galaxy view; hide them in
+    // W7/W9 — connection lines render in galaxy + universe view; hidden in
     // system / planet view so they don't streak through the local scene.
     if (this.connectionLines) {
-      this.connectionLines.visible = next.kind === 'galaxy';
+      this.connectionLines.visible = next.kind === 'galaxy' || next.kind === 'universe';
     }
   }
 
@@ -386,7 +416,7 @@ export class App {
 
   private handlePick(clientX: number, clientY: number): void {
     const rect = this.canvas.getBoundingClientRect();
-    const hit = this.picker.pickAt(clientX, clientY, rect, this.galaxy, this.state);
+    const hit = this.picker.pickAt(clientX, clientY, rect, this.universe, this.state);
     if (!hit) return;
 
     // W6-H — clicking the central black hole jumps the player to the next
@@ -397,27 +427,33 @@ export class App {
       return;
     }
 
+    // W9 — universe view: clicking a galaxy bulge enters that galaxy.
+    if (hit.kind === 'galaxy' && hit.galaxyId) {
+      this.navigateTo({ kind: 'galaxy', galaxyId: hit.galaxyId, systemId: null, planetId: null });
+      return;
+    }
+
     if (this.state.kind === 'galaxy' && hit.kind === 'star') {
-      this.navigateTo({ kind: 'system', systemId: hit.systemId, planetId: null });
+      this.navigateTo({ kind: 'system', galaxyId: hit.galaxyId, systemId: hit.systemId, planetId: null });
       return;
     }
     if (this.state.kind === 'system') {
       if (hit.kind === 'planet' && hit.systemId === this.state.systemId) {
-        this.navigateTo({ kind: 'planet', systemId: hit.systemId, planetId: hit.planetId });
+        this.navigateTo({ kind: 'planet', galaxyId: hit.galaxyId, systemId: hit.systemId, planetId: hit.planetId });
         return;
       }
       if (hit.kind === 'star' && hit.systemId !== this.state.systemId) {
-        this.navigateTo({ kind: 'system', systemId: hit.systemId, planetId: null });
+        this.navigateTo({ kind: 'system', galaxyId: hit.galaxyId, systemId: hit.systemId, planetId: null });
         return;
       }
     }
     if (this.state.kind === 'planet') {
       if (hit.kind === 'planet' && hit.planetId !== this.state.planetId) {
-        this.navigateTo({ kind: 'planet', systemId: hit.systemId, planetId: hit.planetId });
+        this.navigateTo({ kind: 'planet', galaxyId: hit.galaxyId, systemId: hit.systemId, planetId: hit.planetId });
         return;
       }
       if (hit.kind === 'star') {
-        this.navigateTo({ kind: 'system', systemId: hit.systemId, planetId: null });
+        this.navigateTo({ kind: 'system', galaxyId: hit.galaxyId, systemId: hit.systemId, planetId: null });
         return;
       }
     }
@@ -491,6 +527,21 @@ export class App {
       };
     }
 
+    // W9: intergalactic bridge. Surfaces once intergalactic-bridge is unlocked
+    // and the player hasn't claimed a T3 system yet. Targets the closest extra
+    // galaxy's first eligible system.
+    const intergalacticTarget = this.empire.nextIntergalacticTarget();
+    let nextIntergalactic: { galaxyName: string; systemName: string; canAfford: boolean; costHtml: string } | null = null;
+    if (intergalacticTarget) {
+      const intergalacticCost = this.empire.intergalacticClaimCost();
+      nextIntergalactic = {
+        galaxyName: intergalacticTarget.galaxy.name,
+        systemName: intergalacticTarget.system.name,
+        canAfford: canAffordCost(intergalacticCost, haveBag),
+        costHtml: formatCostPills(intergalacticCost, haveBag),
+      };
+    }
+
     return {
       needsMoonChoice: this.empire.needsOutpostMoonChoice(),
       nextAnnex,
@@ -499,11 +550,9 @@ export class App {
         if (!before) return;
         if (this.empire.claimNextAnnex()) {
           sfxAnnex();
-          // Camera-drift to the freshly claimed planet so the player sees
-          // their new asset spin into the rotation. Use the captured target
-          // since the next call will return a different planet.
           this.navigateTo({
             kind: 'planet',
+            galaxyId: this.empire.homeGalaxyId(),
             systemId: this.empire.state.homeSystemId,
             planetId: before.id,
           });
@@ -517,12 +566,29 @@ export class App {
         if (!before) return;
         if (this.empire.claimNextWormhole()) {
           sfxWormhole();
-          // Fly the player into the freshly claimed system so the vortex
-          // visual lands in view immediately and the new T2 multiplier
-          // reads as a tangible reward.
           this.navigateTo({
             kind: 'system',
+            galaxyId: this.empire.homeGalaxyId(),
             systemId: before.id,
+            planetId: null,
+          });
+        } else {
+          sfxError();
+        }
+      },
+      nextIntergalactic,
+      claimNextIntergalactic: () => {
+        const before = this.empire.nextIntergalacticTarget();
+        if (!before) return;
+        if (this.empire.claimNextIntergalactic()) {
+          sfxWormhole();
+          // W9 — fly the player into the freshly claimed extra galaxy so the
+          // T3 reveal lands. Camera leaps across the universe; the cinematic
+          // navigateTo handles the smooth transition.
+          this.navigateTo({
+            kind: 'system',
+            galaxyId: before.galaxy.id,
+            systemId: before.system.id,
             planetId: null,
           });
         } else {
@@ -538,7 +604,7 @@ export class App {
   private rebuildSurfaceIfNeeded(): void {
     const planetData = this.empire.homePlanet();
     if (!planetData) return;
-    const sys = this.galaxy.systems.get(this.empire.state.homeSystemId);
+    const sys = this.universe.systems.get(this.empire.state.homeSystemId);
     if (!sys) return;
     const planetHandle = sys.planets.find((p) => p.data.id === planetData.id);
     if (!planetHandle) return;
@@ -586,7 +652,7 @@ export class App {
     }
 
     if (wantsHandle && ctx) {
-      const sys = this.galaxy.systems.get(ctx.systemId);
+      const sys = this.universe.systems.get(ctx.systemId);
       const planetHandle = sys?.planets.find((p) => p.data.id === ctx.planet.id);
       const moonHandle = planetHandle && cfg.moonId
         ? findOutpostMoon(planetHandle, cfg.moonId)
@@ -618,14 +684,23 @@ export class App {
     const connections: { a: string; b: string; color: string }[] = [];
 
     // Self contributions — only when the empire has actually opened a rift.
-    if (
-      this.empire.state.homeClaimed &&
-      this.empire.hasClaimedWormholeSystem()
-    ) {
+    if (this.empire.state.homeClaimed) {
       const selfColor = this.session.profile.color;
       const home = this.empire.state.homeSystemId;
-      targets.set(home, selfColor);
+      const hasT2 = this.empire.hasClaimedWormholeSystem();
+      const hasT3 = this.empire.hasClaimedIntergalacticSystem();
+      if (hasT2 || hasT3) {
+        targets.set(home, selfColor);
+      }
+      // T2 — in-galaxy wormhole.
       for (const sysId of this.empire.wormholeSystemIds()) {
+        targets.set(sysId, selfColor);
+        connections.push({ a: home, b: sysId, color: selfColor });
+      }
+      // W9 — T3 intergalactic bridge. Connection line stretches from the home
+      // system to the claimed extra-galaxy system (long thin line crossing the
+      // universe view).
+      for (const sysId of this.empire.intergalacticSystemIds()) {
         targets.set(sysId, selfColor);
         connections.push({ a: home, b: sysId, color: selfColor });
       }
@@ -680,7 +755,7 @@ export class App {
         existing.material.uniforms.uColorInner.value = new THREE.Color(color);
         continue;
       }
-      const sys = this.galaxy.systems.get(sid);
+      const sys = this.universe.systems.get(sid);
       if (!sys) continue;
       const handle = makeWormhole(sys.data.starRadius, color);
       attachWormholeToSystem(handle, sys);
@@ -692,19 +767,25 @@ export class App {
     if (this.connectionLines) {
       this.connectionLines.geometry.dispose();
       (this.connectionLines.material as THREE.Material).dispose();
-      this.galaxy.root.remove(this.connectionLines);
+      this.scene.remove(this.connectionLines);
       this.connectionLines = null;
     }
     if (connections.length > 0) {
       const positions: number[] = [];
       const colors: number[] = [];
+      const tmp = new THREE.Vector3();
+      // W9 — connection lines live at the universe-root level (so they can
+      // span galaxies). Endpoints are world positions of each system's group,
+      // which already accounts for the per-galaxy offset.
+      this.universe.root.updateMatrixWorld(true);
       for (const c of connections) {
-        const sa = this.galaxy.systems.get(c.a);
-        const sb = this.galaxy.systems.get(c.b);
+        const sa = this.universe.systems.get(c.a);
+        const sb = this.universe.systems.get(c.b);
         if (!sa || !sb) continue;
-        const pa = sa.data.position;
-        const pb = sb.data.position;
-        positions.push(pa[0], pa[1], pa[2], pb[0], pb[1], pb[2]);
+        sa.group.getWorldPosition(tmp);
+        positions.push(tmp.x, tmp.y, tmp.z);
+        sb.group.getWorldPosition(tmp);
+        positions.push(tmp.x, tmp.y, tmp.z);
         const col = new THREE.Color(c.color);
         colors.push(col.r, col.g, col.b, col.r, col.g, col.b);
       }
@@ -719,10 +800,10 @@ export class App {
         blending: THREE.AdditiveBlending,
       });
       this.connectionLines = new THREE.LineSegments(geo, mat);
-      // Lines only meaningful in galaxy view — at system / planet view their
-      // endpoints are far off-screen and add visual noise.
-      this.connectionLines.visible = this.state.kind === 'galaxy';
-      this.galaxy.root.add(this.connectionLines);
+      // Lines visible in galaxy + universe view — they help the player track
+      // their multi-galaxy claims at a glance.
+      this.connectionLines.visible = this.state.kind === 'galaxy' || this.state.kind === 'universe';
+      this.scene.add(this.connectionLines);
     }
   }
 
@@ -823,7 +904,7 @@ export class App {
       this.empire.bootstrapInSystem(systemId);
       const planetId = this.empire.state.homePlanetId;
       if (planetId) {
-        this.navigateTo({ kind: 'planet', systemId, planetId });
+        this.navigateTo({ kind: 'planet', galaxyId: this.empire.homeGalaxyId(), systemId, planetId });
       }
     } else if (st.homeSystemId !== systemId) {
       // Server reassigned us — our slot must have been swept while we were
@@ -832,7 +913,7 @@ export class App {
       this.empire.bootstrapInSystem(systemId);
       const planetId = this.empire.state.homePlanetId;
       if (planetId) {
-        this.navigateTo({ kind: 'planet', systemId, planetId });
+        this.navigateTo({ kind: 'planet', galaxyId: this.empire.homeGalaxyId(), systemId, planetId });
       }
     }
     this.mpSpawnReady = true;
@@ -1012,13 +1093,16 @@ export class App {
       }
     }
 
-    // 1. Advance the world first. Slow galactic rotation around the central
-    //    black hole (~10 min/revolution), then planet/moon orbits.
-    this.galaxy.root.rotation.y += dt * 0.010;
+    // 1. Advance the world first. Slow galactic rotation around each galaxy's
+    //    own root (so satellite galaxies rotate too, on their own axes), then
+    //    planet/moon orbits inside each.
+    for (const [, gh] of this.universe.galaxies) {
+      gh.root.rotation.y += dt * 0.010;
+    }
     // Billboards (star glow, black hole halo) face the camera position from
     // the previous frame — invisible drift since the camera moves smoothly.
     const prevCamPos = this.camera.position;
-    updateGalaxy(this.galaxy, dt, prevCamPos, this.state.systemId);
+    updateUniverse(this.universe, dt, prevCamPos, this.state.systemId);
 
     // 2. Now place the camera based on the *current* frame's world positions.
     //    This was the source of the click-to-track shimmer: when the camera
@@ -1027,13 +1111,15 @@ export class App {
     this.controller.update(dt);
 
     // 3. Background follows the new camera position so layers always envelop
-    //    the view at any zoom.
+    //    the view at any zoom. Distant galaxy billboards live in the same
+    //    skydome shell so they're always visible regardless of camera position.
     const camPos = this.camera.position;
-    this.galaxy.background.skydome.position.copy(camPos);
-    const layers = this.galaxy.background.starLayers;
+    this.universe.background.skydome.position.copy(camPos);
+    const layers = this.universe.background.starLayers;
     if (layers[0]) layers[0].position.copy(camPos);
     if (layers[1]) layers[1].position.copy(camPos);
     if (layers[2]) layers[2].position.copy(camPos);
+    this.universe.background.distantGalaxies.group.position.copy(camPos);
 
     this.renderer.render(this.scene, this.camera);
 
@@ -1078,7 +1164,11 @@ function formatNumber(n: number): string {
   if (n < 1000) return Math.round(n).toString();
   if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}K`;
   if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n < 1e12) return `${(n / 1e9).toFixed(2)}B`;
+  if (n < 1e15) return `${(n / 1e12).toFixed(2)}T`;
+  if (n < 1e18) return `${(n / 1e15).toFixed(2)}Q`;
+  if (n < 1e21) return `${(n / 1e18).toFixed(2)}Qa`;
+  return `${(n / 1e21).toFixed(2)}Qi`;
 }
 
 // Shorter formatter for trade banners — drops decimals on small whole-number

@@ -204,5 +204,10 @@ function formatNumber(n: number): string {
   if (n < 10_000) return Math.round(n).toString();
   if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}K`;
   if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-  return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n < 1e12) return `${(n / 1e9).toFixed(2)}B`;
+  if (n < 1e15) return `${(n / 1e12).toFixed(2)}T`;     // trillion
+  if (n < 1e18) return `${(n / 1e15).toFixed(2)}Q`;     // quadrillion
+  if (n < 1e21) return `${(n / 1e18).toFixed(2)}Qa`;    // quintillion
+  if (n < 1e24) return `${(n / 1e21).toFixed(2)}Qi`;    // sextillion
+  return `${(n / 1e24).toFixed(2)}Sx`;                  // septillion+
 }

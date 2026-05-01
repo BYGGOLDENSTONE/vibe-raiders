@@ -1,4 +1,4 @@
-import type { GalaxyHandle } from './galaxy';
+import type { UniverseHandle } from './galaxy';
 import type { EconomyKind, LayerKind, LayerState, PlanetData, RiskLevel, SystemData } from './types';
 
 const PLANET_TYPE_LABEL: Record<string, string> = {
@@ -71,6 +71,18 @@ export interface EmpireCtx {
     costHtml: string;
   } | null;
   claimNextWormhole: () => void;
+  // W9 — intergalactic bridge. Appears once the trade-hub-era player buys the
+  // intergalactic-bridge unlock. Targets the nearest unclaimed extra galaxy's
+  // first eligible system at T3 (×10K multiplier). After claim, that galaxy
+  // becomes the player's "second galaxy" — wormhole-transit can then push
+  // them to T4 inside it.
+  nextIntergalactic: {
+    galaxyName: string;
+    systemName: string;
+    canAfford: boolean;
+    costHtml: string;
+  } | null;
+  claimNextIntergalactic: () => void;
 }
 
 export class UI {
@@ -80,7 +92,7 @@ export class UI {
   private panel: HTMLDivElement;
   private hint: HTMLDivElement;
   private banner: HTMLDivElement;
-  private galaxy: GalaxyHandle;
+  private universe: UniverseHandle;
   private navigate: NavigateFn;
   private home: HomeCtx = { systemId: null, planetId: null, fullSystemClaimed: false };
   private empireCtx: EmpireCtx = {
@@ -89,11 +101,13 @@ export class UI {
     claimNextAnnex: () => {},
     nextWormhole: null,
     claimNextWormhole: () => {},
+    nextIntergalactic: null,
+    claimNextIntergalactic: () => {},
   };
-  private layer: LayerState = { kind: 'galaxy', systemId: null, planetId: null };
+  private layer: LayerState = { kind: 'galaxy', galaxyId: 'milky-way', systemId: null, planetId: null };
 
-  constructor(root: HTMLDivElement, galaxy: GalaxyHandle, navigate: NavigateFn) {
-    this.galaxy = galaxy;
+  constructor(root: HTMLDivElement, universe: UniverseHandle, navigate: NavigateFn) {
+    this.universe = universe;
     this.navigate = navigate;
 
     this.breadcrumb = el('div', 'gx-breadcrumb');
@@ -133,6 +147,10 @@ export class UI {
       }
       if (target.closest('[data-claim-wormhole]')) {
         this.empireCtx.claimNextWormhole();
+        return;
+      }
+      if (target.closest('[data-claim-intergalactic]')) {
+        this.empireCtx.claimNextIntergalactic();
         return;
       }
     });
@@ -191,6 +209,23 @@ export class UI {
         <button class="${btnClass}" data-claim-next ${btnAttrs}>Annex</button>
       `;
       extraClass = 'gx-banner-annex';
+    } else if (this.empireCtx.nextIntergalactic) {
+      // W9 — intergalactic banner takes priority over the wormhole banner
+      // because it represents the next milestone after a player has already
+      // claimed their T2 wormhole. The button copy makes the scale obvious.
+      const { galaxyName, systemName, canAfford, costHtml } = this.empireCtx.nextIntergalactic;
+      const btnClass = canAfford ? 'gx-annex-banner-btn ready' : 'gx-annex-banner-btn waiting';
+      const btnAttrs = canAfford ? '' : 'disabled';
+      html = `
+        <span class="gx-banner-ico">✦</span>
+        <span class="gx-banner-text">
+          <span class="gx-banner-eyebrow">Intergalactic bridge · T3 ×10K</span>
+          <strong>${escapeHtml(galaxyName)} · ${escapeHtml(systemName)}</strong>
+        </span>
+        <span class="gx-annex-banner-cost">${costHtml}</span>
+        <button class="${btnClass}" data-claim-intergalactic ${btnAttrs}>Bridge</button>
+      `;
+      extraClass = 'gx-banner-annex gx-banner-intergalactic';
     } else if (this.empireCtx.nextWormhole) {
       const { systemName, canAfford, costHtml } = this.empireCtx.nextWormhole;
       const btnClass = canAfford ? 'gx-annex-banner-btn ready' : 'gx-annex-banner-btn waiting';
@@ -230,8 +265,10 @@ export class UI {
 
   private jumpHome(): void {
     if (!this.home.systemId || !this.home.planetId) return;
+    const galaxyId = this.universe.systemToGalaxy.get(this.home.systemId) ?? null;
     this.navigate({
       kind: 'planet',
+      galaxyId,
       systemId: this.home.systemId,
       planetId: this.home.planetId,
     });
@@ -241,26 +278,37 @@ export class UI {
   private renderBreadcrumb(layer: LayerState): void {
     const parts: { label: string; onClick: (() => void) | null }[] = [];
     parts.push({
-      label: 'Galaxy',
-      onClick: layer.kind === 'galaxy' ? null : () =>
-        this.navigate({ kind: 'galaxy', systemId: null, planetId: null }),
+      label: 'Universe',
+      onClick: layer.kind === 'universe' ? null : () =>
+        this.navigate({ kind: 'universe', galaxyId: null, systemId: null, planetId: null }),
     });
+    if (layer.galaxyId) {
+      const gh = this.universe.galaxies.get(layer.galaxyId);
+      if (gh) {
+        parts.push({
+          label: gh.data.name,
+          onClick: layer.kind === 'galaxy' ? null : () =>
+            this.navigate({ kind: 'galaxy', galaxyId: layer.galaxyId, systemId: null, planetId: null }),
+        });
+      }
+    }
     if (layer.systemId) {
-      const sys = this.galaxy.systems.get(layer.systemId);
+      const sys = this.universe.systems.get(layer.systemId);
       if (sys) {
         const isHomeSys = layer.systemId === this.home.systemId;
         const sysPrefix = isHomeSys
           ? (this.home.fullSystemClaimed ? '★★ ' : '★ ')
           : '';
+        const galaxyId = this.universe.systemToGalaxy.get(layer.systemId) ?? layer.galaxyId;
         parts.push({
           label: sysPrefix + sys.data.name,
           onClick: layer.kind === 'system' ? null : () =>
-            this.navigate({ kind: 'system', systemId: layer.systemId, planetId: null }),
+            this.navigate({ kind: 'system', galaxyId, systemId: layer.systemId, planetId: null }),
         });
       }
     }
     if (layer.planetId && layer.systemId) {
-      const sys = this.galaxy.systems.get(layer.systemId);
+      const sys = this.universe.systems.get(layer.systemId);
       const planet = sys?.planets.find((p) => p.data.id === layer.planetId);
       if (planet) {
         const planetPrefix = layer.planetId === this.home.planetId ? '★ ' : '';
@@ -297,61 +345,89 @@ export class UI {
     this.switcher.appendChild(make('planet', 'Planet'));
     this.switcher.appendChild(make('system', 'System'));
     this.switcher.appendChild(make('galaxy', 'Galaxy'));
+    this.switcher.appendChild(make('universe', 'Universe'));
   }
 
   private canGoTo(layer: LayerState, kind: LayerKind): boolean {
     if (layer.kind === kind) return false;
-    if (kind === 'galaxy') return true;
+    if (kind === 'universe') return true;
+    if (kind === 'galaxy') return layer.galaxyId !== null || layer.kind !== 'universe';
     if (kind === 'system') return layer.systemId !== null;
-    // planet
     return layer.systemId !== null;
   }
 
   private handleSwitch(layer: LayerState, kind: LayerKind): void {
     if (layer.kind === kind) return;
+    if (kind === 'universe') {
+      this.navigate({ kind: 'universe', galaxyId: null, systemId: null, planetId: null });
+      return;
+    }
     if (kind === 'galaxy') {
-      this.navigate({ kind: 'galaxy', systemId: null, planetId: null });
+      // Default to the home galaxy if none explicit (e.g. coming from universe view).
+      const gid = layer.galaxyId ?? 'milky-way';
+      this.navigate({ kind: 'galaxy', galaxyId: gid, systemId: null, planetId: null });
       return;
     }
     if (kind === 'system' && layer.systemId) {
-      this.navigate({ kind: 'system', systemId: layer.systemId, planetId: null });
+      const galaxyId = this.universe.systemToGalaxy.get(layer.systemId) ?? layer.galaxyId;
+      this.navigate({ kind: 'system', galaxyId, systemId: layer.systemId, planetId: null });
       return;
     }
     if (kind === 'planet' && layer.systemId) {
       // pick currently selected planet, or fallback to first
-      const sys = this.galaxy.systems.get(layer.systemId);
+      const sys = this.universe.systems.get(layer.systemId);
       if (!sys) return;
       const pid = layer.planetId ?? sys.planets[0]?.data.id;
       if (!pid) return;
-      this.navigate({ kind: 'planet', systemId: layer.systemId, planetId: pid });
+      const galaxyId = this.universe.systemToGalaxy.get(layer.systemId) ?? layer.galaxyId;
+      this.navigate({ kind: 'planet', galaxyId, systemId: layer.systemId, planetId: pid });
     }
   }
 
   // --- Detail panel ---
   private renderPanel(layer: LayerState): void {
+    if (layer.kind === 'universe') {
+      const count = this.universe.galaxies.size;
+      let totalSystems = 0;
+      for (const [, gh] of this.universe.galaxies) totalSystems += gh.data.systems.length;
+      const galaxyList = Array.from(this.universe.galaxies.values())
+        .map((g) => `<div class="gx-panel-row"><span class="gx-k">${escapeHtml(g.data.name)}</span><span class="gx-v">${g.data.systems.length} systems</span></div>`)
+        .join('');
+      this.panel.innerHTML = `
+        <div class="gx-panel-eyebrow">Universe layer</div>
+        <div class="gx-panel-title">The Local Group</div>
+        <div class="gx-panel-sub">${count} galaxies · ${totalSystems} star systems</div>
+        <p class="gx-panel-desc">Each galaxy is a procedural disc with its own star palette. Click a galaxy bulge to enter — only the Milky Way is reachable until you build the Intergalactic Bridge.</p>
+        <div class="gx-panel-grid">${galaxyList}</div>
+      `;
+      return;
+    }
     if (layer.kind === 'galaxy') {
-      const count = this.galaxy.systems.size;
+      const galaxyId = layer.galaxyId ?? 'milky-way';
+      const gh = this.universe.galaxies.get(galaxyId);
+      if (!gh) return;
+      const count = gh.data.systems.length;
       this.panel.innerHTML = `
         <div class="gx-panel-eyebrow">Galaxy layer</div>
-        <div class="gx-panel-title">Galactic Core</div>
-        <div class="gx-panel-sub">${count} star systems · Supermassive black hole</div>
-        <p class="gx-panel-desc">Star systems orbit the central black hole on a 2D plane. Pick a system and the camera streams you in.</p>
+        <div class="gx-panel-title">${escapeHtml(gh.data.name)}</div>
+        <div class="gx-panel-sub">${count} star systems${gh.blackHole ? ' · Supermassive black hole' : ''}</div>
+        <p class="gx-panel-desc">${count} systems lie in this galaxy. Pick one to fly in.</p>
         <div class="gx-panel-grid">
           <div class="gx-panel-row"><span class="gx-k">Systems</span><span class="gx-v">${count}</span></div>
-          <div class="gx-panel-row"><span class="gx-k">Center</span><span class="gx-v">Black hole</span></div>
-          <div class="gx-panel-row"><span class="gx-k">Plane</span><span class="gx-v">2D orbit</span></div>
+          <div class="gx-panel-row"><span class="gx-k">Disc arms</span><span class="gx-v">${gh.data.palette.arms}</span></div>
+          <div class="gx-panel-row"><span class="gx-k">Radius</span><span class="gx-v">${(gh.data.radius / 1000).toFixed(0)}k units</span></div>
         </div>
       `;
       return;
     }
     if (layer.kind === 'system' && layer.systemId) {
-      const sys = this.galaxy.systems.get(layer.systemId);
+      const sys = this.universe.systems.get(layer.systemId);
       if (!sys) return;
       this.panel.innerHTML = this.systemPanelHTML(sys.data);
       return;
     }
     if (layer.kind === 'planet' && layer.systemId && layer.planetId) {
-      const sys = this.galaxy.systems.get(layer.systemId);
+      const sys = this.universe.systems.get(layer.systemId);
       const planet = sys?.planets.find((p) => p.data.id === layer.planetId);
       if (!planet || !sys) return;
       this.panel.innerHTML = this.planetPanelHTML(planet.data, sys.data);
