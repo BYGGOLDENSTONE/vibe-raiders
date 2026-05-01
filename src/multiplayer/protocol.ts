@@ -34,6 +34,20 @@ export interface PublicPlayer {
   lastSeen: number;
 }
 
+// W13 — server-authoritative ownership. Each entry is targetId → ownerId.
+// targetId is either a planet id ("milky-way:sys-0:p2") or a system id
+// ("milky-way:sys-7"). The relay rejects claim-requests for any targetId
+// already in this map, so two empires never own the same square.
+export type OwnershipMap = Record<string, string>;
+
+// W13 — claim kinds. The server doesn't act on the kind beyond logging /
+// stats, but it lets the client send a single typed message regardless of
+// what's being annexed (home gezegen, T2 anchor, T3 anchor, T2/T3 planet).
+export type ClaimKind =
+  | 'planet'        // any planet (home or T2/T3 system planet)
+  | 't2-anchor'     // first claim on a new T2 system in the home galaxy
+  | 't3-anchor';    // first claim on a new T3 system in an extra galaxy
+
 // --- Client → Server ---------------------------------------------------------
 
 export type ClientMessage =
@@ -48,12 +62,27 @@ export type ClientMessage =
   // W7 — Trade Hub matchmaking. Server picks an eligible counterpart (any
   // other player with tradeHubReady=true) and informs both sides. The actual
   // resource swap is computed locally per side since resources are private.
-  | { kind: 'trade-request' };
+  | { kind: 'trade-request' }
+  // W13 — auto-expand: client requests authoritative ownership of a target.
+  // Server replies with claim-ack (mine) or claim-reject (someone else got
+  // it first). Client should not apply local state changes until the ack
+  // arrives.
+  | { kind: 'claim-request'; targetId: string; claimKind: ClaimKind };
 
 // --- Server → Client ---------------------------------------------------------
 
 export type ServerMessage =
-  | { kind: 'welcome'; you: PublicPlayer; players: PublicPlayer[] }
+  | {
+      kind: 'welcome';
+      you: PublicPlayer;
+      players: PublicPlayer[];
+      // W13 — full ownership snapshot + next round-reset wall-clock ms.
+      // Sent on first connect and after each reset so the client always
+      // knows the authoritative state without waiting for incremental
+      // claim-broadcast messages.
+      ownership: OwnershipMap;
+      nextResetAt: number;
+    }
   | { kind: 'system-assigned'; systemId: string }
   | { kind: 'system-claim-failed'; reason: 'no-systems-available' | 'invalid' }
   | { kind: 'player-joined'; player: PublicPlayer }
@@ -71,4 +100,17 @@ export type ServerMessage =
       // counterpart somebody else picked (false). Drives the banner copy.
       asInitiator: boolean;
     }
-  | { kind: 'trade-failed'; reason: 'no-counterpart' | 'cooldown' };
+  | { kind: 'trade-failed'; reason: 'no-counterpart' | 'cooldown' }
+  // W13 — claim handshake replies. ack means we own targetId now (server
+  // already broadcast claim-broadcast to everyone). reject means another
+  // player got there first; client should skip and retarget.
+  | { kind: 'claim-ack'; targetId: string }
+  | { kind: 'claim-reject'; targetId: string; ownerId: string }
+  // W13 — broadcast to ALL when any player claims a new target. Includes
+  // the original requester via the ownerId field so other clients can
+  // colour the cell by player.
+  | { kind: 'claim-broadcast'; targetId: string; ownerId: string; claimKind: ClaimKind }
+  // W13 — round reset: server wipes all ownership and tells everyone the
+  // next reset wall clock. Client clears its own claimedSystems +
+  // ownedPlanets but keeps resources + upgrades.
+  | { kind: 'round-reset'; nextResetAt: number };

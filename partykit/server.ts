@@ -1,27 +1,35 @@
 // PartyKit relay for The Vibecoder's Guide to the Galaxy.
 //
-// One shared room ("galaxy"). At most MAX_PLAYERS players. The server holds
-// the authoritative ownership table — who has claimed which spawn system,
-// which planets they've annexed, etc. — and broadcasts changes to everyone
-// connected. Resources and upgrade trees are NOT relayed (private per-player).
+// W13 — server is now AUTHORITATIVE for ownership. Every annex / wormhole /
+// intergalactic claim flows through claim-request → claim-ack/reject so two
+// empires never own the same planet or system. The relay also runs a 30-min
+// round timer (UTC :00 / :30) that wipes the ownership map for everyone, so
+// galaxy capacity scales beyond a single 64-player cohort.
 //
 // Persistence: room.storage durably persists the player table across hibernation
 // and Cloudflare Worker restarts, so reconnects keep the same spawn system and
 // owned planets even after a brief drop. Players idle for STALE_MS get evicted
-// on the next sweep so their slot frees up.
+// on the next sweep so their slot frees up. Ownership map is persisted too so
+// a worker restart mid-round doesn't wipe the round.
 
 import type * as Party from 'partykit/server';
 import type {
+  ClaimKind,
   ClientMessage,
+  OwnershipMap,
   PlayerProfile,
   PublicEmpireState,
   PublicPlayer,
   ServerMessage,
 } from '../src/multiplayer/protocol';
 
-const MAX_PLAYERS = 16;
+const MAX_PLAYERS = 64;
 const STALE_MS = 24 * 60 * 60 * 1000; // 24 hours offline → slot freed
 const PLAYERS_KEY = 'players.v1';
+// W13 — round-state storage.
+const OWNERSHIP_KEY = 'ownership.v1';
+const ROUND_KEY = 'round.v1';
+const ROUND_PERIOD_MS = 30 * 60 * 1000;
 // W7 — minimum gap between trade requests from the same player, in ms. Light
 // rate-limit so a buggy/spammy client can't flood the room. Client also has
 // its own 60s cooldown for UX, this is the server's safety net.
@@ -33,8 +41,19 @@ const COUNTERPART_FRESH_MS = 5 * 60 * 1000;
 
 type PlayerTable = Record<string, PublicPlayer>;
 
+interface RoundState {
+  nextResetAt: number;
+}
+
 export default class GalaxyServer implements Party.Server {
   private players: PlayerTable = {};
+  // W13 — master ownership table. Key: targetId (planet or system id). Value:
+  // ownerId (playerId). Only mutated by claim-request handler + roundReset.
+  private ownership: OwnershipMap = {};
+  // W13 — wall-clock ms of the next round reset. Refreshed in onStart from
+  // storage and bumped each time a reset fires.
+  private nextResetAt = 0;
+  private resetTimer: ReturnType<typeof setTimeout> | null = null;
   private loaded = false;
   // Map of playerId → last trade-request wall-clock ms. Lives in memory only;
   // a server restart drops cooldowns, which is fine — the client cooldown
@@ -49,6 +68,24 @@ export default class GalaxyServer implements Party.Server {
   async onStart() {
     const stored = await this.room.storage.get<PlayerTable>(PLAYERS_KEY);
     this.players = stored ?? {};
+    const ownStored = await this.room.storage.get<OwnershipMap>(OWNERSHIP_KEY);
+    this.ownership = ownStored ?? {};
+    const round = await this.room.storage.get<RoundState>(ROUND_KEY);
+    const computed = computeNextResetAt(Date.now());
+    if (round && round.nextResetAt > Date.now()) {
+      this.nextResetAt = round.nextResetAt;
+    } else {
+      // Stale or missing round state → recompute and, if storage said the
+      // round had already ended while the worker was hibernated, wipe
+      // ownership so the new cohort starts fresh.
+      this.nextResetAt = computed;
+      if (round && round.nextResetAt <= Date.now()) {
+        this.ownership = {};
+        await this.room.storage.put(OWNERSHIP_KEY, this.ownership);
+      }
+      await this.room.storage.put(ROUND_KEY, { nextResetAt: this.nextResetAt });
+    }
+    this.scheduleResetTimer();
     this.sweepStale();
     this.loaded = true;
   }
@@ -67,7 +104,6 @@ export default class GalaxyServer implements Party.Server {
 
     // Tag the connection with the playerId so onMessage / onClose know who
     // they're dealing with without re-parsing the URL.
-    (conn.state as ConnState | null) ?? null;
     conn.setState({ playerId } satisfies ConnState);
 
     const now = Date.now();
@@ -77,7 +113,7 @@ export default class GalaxyServer implements Party.Server {
     }
 
     // If the player exists but the room is over capacity (sweep failed to
-    // free a slot, e.g. all 16 are active), reject. New players also rejected.
+    // free a slot, e.g. all 64 are active), reject. New players also rejected.
     if (!existing && Object.keys(this.players).length >= MAX_PLAYERS) {
       conn.close(4429, 'room full');
       return;
@@ -87,6 +123,8 @@ export default class GalaxyServer implements Party.Server {
       kind: 'welcome',
       you: existing ?? makePlaceholder(playerId, now),
       players: Object.values(this.players),
+      ownership: this.ownership,
+      nextResetAt: this.nextResetAt,
     };
     conn.send(JSON.stringify(welcome));
   }
@@ -133,7 +171,74 @@ export default class GalaxyServer implements Party.Server {
       case 'trade-request':
         await this.handleTradeRequest(sender, playerId);
         break;
+      case 'claim-request':
+        await this.handleClaimRequest(sender, playerId, msg.targetId, msg.claimKind);
+        break;
     }
+  }
+
+  // W13 — server-authoritative annex. First-come-first-served on targetId.
+  // No resource validation here (resources are private per W6 design); client
+  // is trusted for affordability, server is trusted for uniqueness.
+  private async handleClaimRequest(
+    conn: Party.Connection,
+    playerId: string,
+    targetId: string,
+    claimKind: ClaimKind,
+  ) {
+    if (!targetId) return;
+    const existingOwner = this.ownership[targetId];
+    if (existingOwner) {
+      // Already owned. If the requester is the current owner, treat it as
+      // an idempotent ack so a delayed/duplicate request doesn't desync.
+      if (existingOwner === playerId) {
+        send(conn, { kind: 'claim-ack', targetId });
+      } else {
+        send(conn, { kind: 'claim-reject', targetId, ownerId: existingOwner });
+      }
+      return;
+    }
+    this.ownership[targetId] = playerId;
+    await this.room.storage.put(OWNERSHIP_KEY, this.ownership);
+    // Tell the requester it's theirs, then broadcast to everyone so other
+    // clients can update labels / map / bulge tint immediately.
+    send(conn, { kind: 'claim-ack', targetId });
+    const broadcast: ServerMessage = {
+      kind: 'claim-broadcast',
+      targetId,
+      ownerId: playerId,
+      claimKind,
+    };
+    this.room.broadcast(JSON.stringify(broadcast));
+  }
+
+  // W13 — schedule the next round reset. Called from onStart and after each
+  // reset fires. PartyKit hibernation will clear the timer; onStart restores
+  // state from storage and re-schedules.
+  private scheduleResetTimer() {
+    if (this.resetTimer) clearTimeout(this.resetTimer);
+    const delay = Math.max(1000, this.nextResetAt - Date.now());
+    this.resetTimer = setTimeout(() => {
+      void this.handleRoundReset();
+    }, delay);
+  }
+
+  private async handleRoundReset() {
+    this.ownership = {};
+    this.nextResetAt = computeNextResetAt(Date.now());
+    await this.room.storage.put(OWNERSHIP_KEY, this.ownership);
+    await this.room.storage.put(ROUND_KEY, { nextResetAt: this.nextResetAt });
+    // Clear per-player ownership-derived public state so the leaderboard /
+    // labels reset cleanly. Keep profile + lastSeen + systemId so reconnects
+    // remember who someone is — empire layer will re-bootstrap territory.
+    for (const p of Object.values(this.players)) {
+      p.state.ownedPlanets = [];
+      p.state.claimedSystems = {};
+    }
+    await this.persist();
+    const message: ServerMessage = { kind: 'round-reset', nextResetAt: this.nextResetAt };
+    this.room.broadcast(JSON.stringify(message));
+    this.scheduleResetTimer();
   }
 
   // W7 — pick any other tradeHubReady player and notify both sides that a
@@ -322,4 +427,11 @@ function dedupe<T>(arr: T[]): T[] {
 
 function send(conn: Party.Connection, msg: ServerMessage) {
   conn.send(JSON.stringify(msg));
+}
+
+// W13 — round resets every 30 min on UTC :00 and :30. Returns the wall-clock
+// ms of the next reset boundary strictly after `now`.
+function computeNextResetAt(now: number): number {
+  const period = ROUND_PERIOD_MS;
+  return Math.floor(now / period) * period + period;
 }

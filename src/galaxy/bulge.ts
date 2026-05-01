@@ -78,6 +78,9 @@ const BAKE_FRAG = /* glsl */ `
 `;
 
 // Runtime fragment shader — cheap. 1 texture sample + per-galaxy tint blend.
+// W13 — owner tint mixes a player's profile colour into the arm-band channel
+// so any galaxy with claimed territory wears its dominant owner's hue. Strength
+// caps at ~0.4 so palette identity stays readable.
 const FRAG = /* glsl */ `
   precision mediump float;
   varying vec2 vUv;
@@ -87,6 +90,8 @@ const FRAG = /* glsl */ `
   uniform vec3 uArmColor;
   uniform float uIntensity;
   uniform float uRotation;
+  uniform vec3 uOwnerTint;
+  uniform float uOwnerStrength;
 
   void main() {
     // Per-galaxy UV rotation so each baked template doesn't read identically.
@@ -96,7 +101,9 @@ const FRAG = /* glsl */ `
     vec2 uv = vec2(ca * c.x - sa * c.y, sa * c.x + ca * c.y) + 0.5;
 
     vec4 t = texture2D(uTex, uv);
-    vec3 col = uCoreColor * t.r + uArmColor * t.g;
+    vec3 armCol = mix(uArmColor, uOwnerTint, clamp(uOwnerStrength, 0.0, 0.4));
+    vec3 coreCol = mix(uCoreColor, uOwnerTint, clamp(uOwnerStrength * 0.6, 0.0, 0.25));
+    vec3 col = coreCol * t.r + armCol * t.g;
     float alpha = t.a * uIntensity;
     gl_FragColor = vec4(col * uIntensity, alpha);
   }
@@ -187,11 +194,16 @@ export function makeBulge(galaxy: GalaxyData): BulgeHandle {
     vertexShader: VERT,
     fragmentShader: FRAG,
     uniforms: {
-      uTex:       { value: baseTexture },
-      uCoreColor: { value: new THREE.Color(galaxy.palette.bulgeColor[0], galaxy.palette.bulgeColor[1], galaxy.palette.bulgeColor[2]) },
-      uArmColor:  { value: new THREE.Color(galaxy.palette.armColor[0], galaxy.palette.armColor[1], galaxy.palette.armColor[2]) },
-      uIntensity: { value: 1.4 },
-      uRotation:  { value: rotation },
+      uTex:           { value: baseTexture },
+      uCoreColor:     { value: new THREE.Color(galaxy.palette.bulgeColor[0], galaxy.palette.bulgeColor[1], galaxy.palette.bulgeColor[2]) },
+      uArmColor:      { value: new THREE.Color(galaxy.palette.armColor[0], galaxy.palette.armColor[1], galaxy.palette.armColor[2]) },
+      uIntensity:     { value: 1.4 },
+      uRotation:      { value: rotation },
+      // W13 — owner tint defaults to neutral white at zero strength (no
+      // visible effect). App pushes the dominant owner's profile colour +
+      // ownership-percentage strength via setBulgeOwnerTint().
+      uOwnerTint:     { value: new THREE.Color(1, 1, 1) },
+      uOwnerStrength: { value: 0.0 },
     },
     transparent: true,
     depthWrite: false,
@@ -244,6 +256,24 @@ export function updateBulge(b: BulgeHandle, cameraPos: THREE.Vector3, galaxyWorl
   // Pick proxy is reachable whenever the bulge is at least faintly bright —
   // covers universe view and "other galaxy" clicks from inside another galaxy.
   b.pickProxy.visible = intensity > 0.25;
+}
+
+// W13 — set the owner-tint blend on a single galaxy's bulge. `color` is any
+// CSS colour string from a player profile; `strength` is the ownership share
+// (0..1) which we scale to a max blend of 0.4 inside the shader so palette
+// identity stays readable even at full ownership.
+export function setBulgeOwnerTint(b: BulgeHandle, color: string | null, strength: number): void {
+  const tint = b.material.uniforms.uOwnerTint.value as THREE.Color;
+  if (color) {
+    tint.set(color);
+  } else {
+    tint.set(0xffffff);
+  }
+  // Map ownership-share (0..1) into the shader's 0..0.4 blend window. sqrt
+  // gives early visibility — 5 % ownership reads as ~9 % blend instead of
+  // a barely-perceptible 2 % linear pass-through.
+  const clamped = Math.max(0, Math.min(1, strength));
+  b.material.uniforms.uOwnerStrength.value = Math.sqrt(clamped) * 0.4;
 }
 
 export function disposeBulge(b: BulgeHandle): void {

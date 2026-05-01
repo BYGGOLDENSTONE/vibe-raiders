@@ -50,39 +50,13 @@ interface HomeCtx {
   fullSystemClaimed: boolean;
 }
 
-// Slim hook surface UI uses to render the W4-E / W6-E / W7 claim flows without
+// Slim hook surface UI uses to render the W4-E moon-pick prompt without
 // taking a hard dependency on Empire (keeps galaxy/* free of empire types).
+// W13 — manual annex / wormhole / intergalactic banners removed; the auto-
+// expand engine handles all territorial claims and the HUD's Next chip
+// surfaces the in-flight target instead.
 export interface EmpireCtx {
   needsMoonChoice: boolean;
-  // W6-E — the single auto-targeted annex. null when no annex is available
-  // (system-expansion not unlocked, or every home-system planet owned).
-  nextAnnex: {
-    planetName: string;
-    canAfford: boolean;
-    costHtml: string;     // pre-formatted cost pills, same renderer as upgrades
-  } | null;
-  claimNextAnnex: () => void;
-  // W7 — wormhole system annex. Appears only after the home system is fully
-  // claimed AND wormhole-transit is unlocked AND the player hasn't claimed
-  // a T2 system yet. Targets the closest unclaimed system in galaxy coords.
-  nextWormhole: {
-    systemName: string;
-    canAfford: boolean;
-    costHtml: string;
-  } | null;
-  claimNextWormhole: () => void;
-  // W9 — intergalactic bridge. Appears once the trade-hub-era player buys the
-  // intergalactic-bridge unlock. Targets the nearest unclaimed extra galaxy's
-  // first eligible system at T3 (×10K multiplier). After claim, that galaxy
-  // becomes the player's "second galaxy" — wormhole-transit can then push
-  // them to T4 inside it.
-  nextIntergalactic: {
-    galaxyName: string;
-    systemName: string;
-    canAfford: boolean;
-    costHtml: string;
-  } | null;
-  claimNextIntergalactic: () => void;
 }
 
 export class UI {
@@ -97,12 +71,6 @@ export class UI {
   private home: HomeCtx = { systemId: null, planetId: null, fullSystemClaimed: false };
   private empireCtx: EmpireCtx = {
     needsMoonChoice: false,
-    nextAnnex: null,
-    claimNextAnnex: () => {},
-    nextWormhole: null,
-    claimNextWormhole: () => {},
-    nextIntergalactic: null,
-    claimNextIntergalactic: () => {},
   };
   private layer: LayerState = { kind: 'galaxy', galaxyId: 'milky-way', systemId: null, planetId: null };
 
@@ -136,24 +104,9 @@ export class UI {
     this.banner.style.display = 'none';
     root.appendChild(this.banner);
 
-    // W6-E + W7: banner buttons are routed by a single delegated handler.
-    // Each button declares its action via a data attribute so future flows
-    // (trade hub, etc.) can plug in without rewiring this listener.
-    this.banner.addEventListener('click', (e) => {
-      const target = e.target as HTMLElement;
-      if (target.closest('[data-claim-next]')) {
-        this.empireCtx.claimNextAnnex();
-        return;
-      }
-      if (target.closest('[data-claim-wormhole]')) {
-        this.empireCtx.claimNextWormhole();
-        return;
-      }
-      if (target.closest('[data-claim-intergalactic]')) {
-        this.empireCtx.claimNextIntergalactic();
-        return;
-      }
-    });
+    // W13 — banner only carries the moon-pick prompt now; the click handler
+    // is gone since there's nothing actionable in the moon flow (the moon
+    // itself is the click target inside the 3D scene).
 
     this.hint = el('div', 'gx-hint');
     this.hint.innerHTML = `
@@ -183,65 +136,17 @@ export class UI {
   }
 
   private renderBanner(): void {
-    // Banner priority: moon-pick (W4-E) over home-system annex (W6-E) over
-    // wormhole annex (W7). Moon-pick is a one-shot prompt and should win;
-    // home-system annex sits there for the entire expansion phase; wormhole
-    // only appears once the home system is full and transit is unlocked, so
-    // by then the planet-annex banner is already gone.
+    // W13 — banner only renders the W4-E moon-pick prompt now. Annex /
+    // wormhole / intergalactic flows are fully automated; the HUD's "Next"
+    // chip surfaces the engine's current target instead.
     let html = '';
-    let extraClass = '';
     if (this.empireCtx.needsMoonChoice) {
       html = `
         <span class="gx-banner-ico">◐</span>
         <span><strong>Pick an outpost moon</strong> — open your home planet view and click one of its moons.</span>
       `;
-    } else if (this.empireCtx.nextAnnex) {
-      const { planetName, canAfford, costHtml } = this.empireCtx.nextAnnex;
-      const btnClass = canAfford ? 'gx-annex-banner-btn ready' : 'gx-annex-banner-btn waiting';
-      const btnAttrs = canAfford ? '' : 'disabled';
-      html = `
-        <span class="gx-banner-ico">✦</span>
-        <span class="gx-banner-text">
-          <span class="gx-banner-eyebrow">Next annex</span>
-          <strong>${escapeHtml(planetName)}</strong>
-        </span>
-        <span class="gx-annex-banner-cost">${costHtml}</span>
-        <button class="${btnClass}" data-claim-next ${btnAttrs}>Annex</button>
-      `;
-      extraClass = 'gx-banner-annex';
-    } else if (this.empireCtx.nextIntergalactic) {
-      // W9 — intergalactic banner takes priority over the wormhole banner
-      // because it represents the next milestone after a player has already
-      // claimed their T2 wormhole. The button copy makes the scale obvious.
-      const { galaxyName, systemName, canAfford, costHtml } = this.empireCtx.nextIntergalactic;
-      const btnClass = canAfford ? 'gx-annex-banner-btn ready' : 'gx-annex-banner-btn waiting';
-      const btnAttrs = canAfford ? '' : 'disabled';
-      html = `
-        <span class="gx-banner-ico">✦</span>
-        <span class="gx-banner-text">
-          <span class="gx-banner-eyebrow">Intergalactic bridge · T3 ×10K</span>
-          <strong>${escapeHtml(galaxyName)} · ${escapeHtml(systemName)}</strong>
-        </span>
-        <span class="gx-annex-banner-cost">${costHtml}</span>
-        <button class="${btnClass}" data-claim-intergalactic ${btnAttrs}>Bridge</button>
-      `;
-      extraClass = 'gx-banner-annex gx-banner-intergalactic';
-    } else if (this.empireCtx.nextWormhole) {
-      const { systemName, canAfford, costHtml } = this.empireCtx.nextWormhole;
-      const btnClass = canAfford ? 'gx-annex-banner-btn ready' : 'gx-annex-banner-btn waiting';
-      const btnAttrs = canAfford ? '' : 'disabled';
-      html = `
-        <span class="gx-banner-ico">✺</span>
-        <span class="gx-banner-text">
-          <span class="gx-banner-eyebrow">Wormhole annex · T2 ×100</span>
-          <strong>${escapeHtml(systemName)}</strong>
-        </span>
-        <span class="gx-annex-banner-cost">${costHtml}</span>
-        <button class="${btnClass}" data-claim-wormhole ${btnAttrs}>Open Rift</button>
-      `;
-      extraClass = 'gx-banner-annex gx-banner-wormhole';
     }
-    this.banner.className = 'gx-banner' + (extraClass ? ' ' + extraClass : '');
+    this.banner.className = 'gx-banner';
     if (html) {
       this.banner.innerHTML = html;
       this.banner.style.display = '';
@@ -459,9 +364,8 @@ export class UI {
       : `${p.moons.length} (${p.moons.map((m) => escapeHtml(m.name.split(' ').pop() ?? '')).join(', ')})`;
     const riskCls = RISK_CLASS[p.risk];
 
-    // W6-E removed the per-planet annex button — annexing is now driven from
-    // a single banner control that always targets the closest unowned home-
-    // system planet, so the player only ever has one button to click.
+    // W13 — annexation is fully automated by the auto-expand engine; this
+    // planel panel is now purely informational.
 
     return `
       <div class="gx-panel-eyebrow">Planet focus</div>

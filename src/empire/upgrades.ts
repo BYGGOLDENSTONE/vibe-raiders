@@ -269,6 +269,19 @@ function buildCatalogue(): UpgradeNode[] {
       descs:   [0.05, 0.05, 0.10, 0.15, 0.20, 0.25].map((v) => `+${Math.round(v * 100)}% drone speed`),
       cost: (t) => tieredCost(180, 2.15, t),
     },
+    // W13 — Auto-Annex Drones. Cuts the auto-expand drone tick interval. Each
+    // tier adds value=1 (×2 throughput); three tiers stack to ×8 — at full
+    // upgrades drones attempt 8 claims per second instead of 1. Sits in the
+    // drones row, pre-required by Drone Cargo II so the player has at least
+    // a baseline drone fleet before automation kicks in. Only 3 tiers (vs 6
+    // for the other chains) since the gameplay impact is dramatic.
+    {
+      baseId: 'auto-annex', name: 'Auto-Annex Drones', category: 'drones', row: 6,
+      headPrereq: 'drone-cargo-2',
+      effects: [1, 1, 1, 1, 1, 2].map((v): UpgradeEffect => ({ kind: 'auto-rate', value: v })),
+      descs:   ['×2 auto-expand rate', '×3 auto-expand rate', '×4 auto-expand rate', '×5 auto-expand rate', '×6 auto-expand rate', '×8 auto-expand rate'],
+      cost: (t) => tieredCost(2000, 3.5, t),
+    },
   ];
   for (const ch of westChains) {
     let chainPrev: string = ch.headPrereq;

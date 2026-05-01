@@ -125,6 +125,10 @@ export type UpgradeEffect =
   | { kind: 'drone-speed'; value: number }                         // +X drone speed
   | { kind: 'drone-cargo'; value: number }                         // +X cargo
   | { kind: 'storage-mul'; value: number }                         // +X storage cap
+  // W13 — multiplies the auto-claim attempt rate. Each tier halves the
+  // interval (e.g. value=1 → ×2 attempts/sec). Stacks additively across
+  // tiers, so the three Auto-Annex Drones nodes give ×8 total.
+  | { kind: 'auto-rate'; value: number }
   | { kind: 'unlock'; flag: UnlockFlag };
 
 export interface UpgradeNode {

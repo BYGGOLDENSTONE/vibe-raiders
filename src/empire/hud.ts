@@ -11,6 +11,15 @@ import {
 } from './types';
 import { sfxClick } from '../audio/sfx';
 
+// W13 — friendly label for each auto-claim kind (rendered in the Next chip).
+const AUTO_KIND_LABEL: Record<string, string> = {
+  'home-planet': 'Annex',
+  't2-planet':   'T2 Planet',
+  't3-planet':   'T3 Planet',
+  't2-anchor':   'Wormhole Anchor',
+  't3-anchor':   'Intergalactic Bridge',
+};
+
 interface ChipDom {
   root: HTMLDivElement;
   amount: HTMLSpanElement;
@@ -32,6 +41,15 @@ export class ResourceHUD {
   private onTradeClick: () => void = () => {};
   private displayed: ResourceBag;
   private displayedRates: ResourceBag;
+  // W13 — auto-expand status chip (target name + cost) and round-reset
+  // countdown chip (MP only). Both are show/hide so solo doesn't get the
+  // round chip.
+  private nextChip: HTMLDivElement;
+  private nextLabel: HTMLSpanElement;
+  private nextTarget: HTMLSpanElement;
+  private nextCost: HTMLSpanElement;
+  private roundChip: HTMLDivElement;
+  private roundCounter: HTMLSpanElement;
 
   constructor(parent: HTMLElement, empire: Empire, panel: UpgradePanel) {
     this.empire = empire;
@@ -102,7 +120,54 @@ export class ResourceHUD {
     this.root.appendChild(this.tradeBtn);
     this.tradeCooldownEl = this.tradeBtn.querySelector('[data-cooldown]') as HTMLSpanElement;
 
+    // W13 — Next-target chip. Mirrors the resource chip styling but with a
+    // different colour ramp (green when affordable, red when waiting on
+    // income). Hidden until auto-expand is unlocked (system-expansion).
+    this.nextChip = document.createElement('div');
+    this.nextChip.className = 'em-chip em-chip-next';
+    this.nextChip.style.display = 'none';
+    this.nextChip.title = 'Next auto-expand target';
+    this.nextChip.innerHTML = `
+      <span class="em-chip-dot"></span>
+      <span class="em-chip-name" data-next-label>Next</span>
+      <span class="em-chip-amount" data-next-target>—</span>
+      <span class="em-chip-rate" data-next-cost>—</span>
+    `;
+    this.root.appendChild(this.nextChip);
+    this.nextLabel = this.nextChip.querySelector('[data-next-label]') as HTMLSpanElement;
+    this.nextTarget = this.nextChip.querySelector('[data-next-target]') as HTMLSpanElement;
+    this.nextCost = this.nextChip.querySelector('[data-next-cost]') as HTMLSpanElement;
+
+    // W13 — round-reset countdown chip. App calls setRoundCountdown(ms) each
+    // frame in MP mode; null hides the chip (solo or relay-not-yet-ready).
+    this.roundChip = document.createElement('div');
+    this.roundChip.className = 'em-chip em-chip-round';
+    this.roundChip.style.display = 'none';
+    this.roundChip.title = 'Round resets every 30 minutes — territory wipes, resources + upgrades carry over';
+    this.roundChip.innerHTML = `
+      <span class="em-chip-dot"></span>
+      <span class="em-chip-name">Round</span>
+      <span class="em-chip-amount" data-round-counter>—</span>
+    `;
+    this.root.appendChild(this.roundChip);
+    this.roundCounter = this.roundChip.querySelector('[data-round-counter]') as HTMLSpanElement;
+
     this.refresh();
+  }
+
+  // W13 — App pushes the round-reset countdown ms each frame. Pass null to
+  // hide the chip (solo mode or relay not ready). MM:SS format.
+  setRoundCountdown(remainingMs: number | null): void {
+    if (remainingMs === null) {
+      this.roundChip.style.display = 'none';
+      return;
+    }
+    this.roundChip.style.display = '';
+    const secs = Math.max(0, Math.floor(remainingMs / 1000));
+    const mm = Math.floor(secs / 60).toString().padStart(2, '0');
+    const ss = (secs % 60).toString().padStart(2, '0');
+    this.roundCounter.textContent = `${mm}:${ss}`;
+    this.roundChip.classList.toggle('em-chip-round-soon', remainingMs <= 60_000);
   }
 
   // App wires its trade handler in here. Kept as a setter so the HUD doesn't
@@ -184,6 +249,21 @@ export class ResourceHUD {
     this.droneCountEl.textContent = String(m.droneCount);
     this.droneMulEl.textContent = `×${throughput.toFixed(2)}`;
 
+    // W13 — auto-expand "Next" chip. Hidden until the drone engine has any
+    // candidate (system-expansion bought + a viable target found).
+    const next = this.empire.peekNextAutoClaim();
+    if (next) {
+      this.nextChip.style.display = '';
+      this.nextLabel.textContent = AUTO_KIND_LABEL[next.kind] ?? 'Next';
+      this.nextTarget.textContent = next.label;
+      const can = canAfford(this.empire.state.resources, next.cost);
+      this.nextCost.textContent = formatCostShort(next.cost);
+      this.nextChip.classList.toggle('em-chip-next-ready', can);
+      this.nextChip.classList.toggle('em-chip-next-waiting', !can);
+    } else {
+      this.nextChip.style.display = 'none';
+    }
+
     // Button counter: owned / total — and pulse when something is buyable.
     const ready = this.panel.readyCount();
     const owned = this.panel.ownedCount();
@@ -210,4 +290,28 @@ function formatNumber(n: number): string {
   if (n < 1e21) return `${(n / 1e18).toFixed(2)}Qa`;    // quintillion
   if (n < 1e24) return `${(n / 1e21).toFixed(2)}Qi`;    // sextillion
   return `${(n / 1e24).toFixed(2)}Sx`;                  // septillion+
+}
+
+// W13 — single-line cost summary for the Next chip. Picks the dominant
+// resource (largest amount) so the player has a quick "how much before this
+// fires" read; full breakdown is implicit since the chip pulses while paid.
+function formatCostShort(cost: Partial<ResourceBag>): string {
+  let bestKey: ResourceKey | null = null;
+  let bestVal = 0;
+  for (const k of RESOURCE_KEYS) {
+    const v = cost[k];
+    if (v === undefined || v <= 0) continue;
+    if (v > bestVal) { bestVal = v; bestKey = k; }
+  }
+  if (!bestKey) return '—';
+  return `${formatNumber(bestVal)} ${bestKey}`;
+}
+
+function canAfford(have: ResourceBag, cost: Partial<ResourceBag>): boolean {
+  for (const k of RESOURCE_KEYS) {
+    const need = cost[k];
+    if (need === undefined || need <= 0) continue;
+    if (have[k] < need) return false;
+  }
+  return true;
 }

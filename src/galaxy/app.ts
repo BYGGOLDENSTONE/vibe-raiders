@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { LayerState } from './types';
 import { generateUniverse } from './generation';
 import { buildUniverse, updateUniverse, setActiveSystem, setActiveGalaxy, hideAllSystemsForUniverseView, systemWorldPositionFromData, type UniverseHandle } from './galaxy';
-import { prebakeBulgeTextures } from './bulge';
+import { prebakeBulgeTextures, setBulgeOwnerTint } from './bulge';
 import { CameraController } from './camera-controller';
 import { LabelManager } from './labels';
 import { Picker } from './picking';
@@ -12,7 +12,7 @@ import { Empire } from '../empire/empire';
 import type { TradeSwap } from '../empire/empire';
 import { ResourceHUD } from '../empire/hud';
 import { UpgradePanel } from '../empire/panel';
-import { RESOURCE_COLOR, RESOURCE_KEYS, RESOURCE_LABEL, type ResourceBag, type ResourceKey } from '../empire/types';
+import { RESOURCE_COLOR, RESOURCE_LABEL } from '../empire/types';
 import type { SessionConfig } from '../multiplayer/profile';
 import { goToVibeJamHub } from '../portal';
 import { MultiplayerClient, type ConnectionStatus } from '../multiplayer/client';
@@ -42,7 +42,6 @@ import {
   sfxError,
   sfxLayerTransition,
   sfxTrade,
-  sfxWormhole,
 } from '../audio/sfx';
 
 const GALAXY_SEED = 20260430;
@@ -265,11 +264,17 @@ export class App {
       // W11 — own ownership shifted (annex / wormhole / intergalactic). Map
       // re-renders cheaply if it's closed (early-outs in render()).
       this.mapOverlay.render();
+      // W13 — galaxy bulge tint follows ownership share, including own claims
+      // that haven't yet been mirrored to the relay.
+      this.refreshGalaxyTints();
       this.publishMp();
     });
     this.rebuildSurfaceIfNeeded();
     this.rebuildMoonOutpostIfNeeded();
     this.rebuildWormholesIfNeeded();
+    // W13 — initial bulge tint pass so the home galaxy already wears the
+    // player's colour the moment the scene appears (before the first emit).
+    this.refreshGalaxyTints();
 
     // W6-D — multiplayer wiring. Solo mode skips this entirely so the relay
     // is only opened when the player actually wants to share a galaxy.
@@ -564,106 +569,12 @@ export class App {
     this.ui.setEmpireContext(this.buildEmpireCtx());
   }
 
-  // EmpireCtx wires UI hooks (banner) to the empire layer without leaking
-  // empire types into galaxy/*. Rebuilt on every emit so the ctx always sees
-  // fresh state (next-target shifts, costs grow, etc).
+  // W13 — UI banner is moon-pick only now; empire ctx is a single-field hook.
+  // Annexation / wormhole / intergalactic flows are owned by the auto-expand
+  // engine in src/empire/empire.ts.
   private buildEmpireCtx() {
-    const haveBag = this.empire.state.resources;
-
-    // W6-E: home-system planet annex (always-on while system-expansion is up
-    // and the home system has unowned planets).
-    const annexTarget = this.empire.nextAnnexTarget();
-    const annexCost = this.empire.nextAnnexCost();
-    let nextAnnex: { planetName: string; canAfford: boolean; costHtml: string } | null = null;
-    if (annexTarget && annexCost) {
-      nextAnnex = {
-        planetName: annexTarget.name,
-        canAfford: canAffordCost(annexCost, haveBag),
-        costHtml: formatCostPills(annexCost, haveBag),
-      };
-    }
-
-    // W7: wormhole system annex. Only surfaces once wormhole-transit is
-    // bought and no T2 system has been claimed yet.
-    const wormholeTarget = this.empire.nextWormholeTarget();
-    let nextWormhole: { systemName: string; canAfford: boolean; costHtml: string } | null = null;
-    if (wormholeTarget) {
-      const wormholeCost = this.empire.wormholeClaimCost();
-      nextWormhole = {
-        systemName: wormholeTarget.name,
-        canAfford: canAffordCost(wormholeCost, haveBag),
-        costHtml: formatCostPills(wormholeCost, haveBag),
-      };
-    }
-
-    // W9: intergalactic bridge. Surfaces once intergalactic-bridge is unlocked
-    // and the player hasn't claimed a T3 system yet. Targets the closest extra
-    // galaxy's first eligible system.
-    const intergalacticTarget = this.empire.nextIntergalacticTarget();
-    let nextIntergalactic: { galaxyName: string; systemName: string; canAfford: boolean; costHtml: string } | null = null;
-    if (intergalacticTarget) {
-      const intergalacticCost = this.empire.intergalacticClaimCost();
-      nextIntergalactic = {
-        galaxyName: intergalacticTarget.galaxy.name,
-        systemName: intergalacticTarget.system.name,
-        canAfford: canAffordCost(intergalacticCost, haveBag),
-        costHtml: formatCostPills(intergalacticCost, haveBag),
-      };
-    }
-
     return {
       needsMoonChoice: this.empire.needsOutpostMoonChoice(),
-      nextAnnex,
-      claimNextAnnex: () => {
-        const before = this.empire.nextAnnexTarget();
-        if (!before) return;
-        if (this.empire.claimNextAnnex()) {
-          sfxAnnex();
-          this.navigateTo({
-            kind: 'planet',
-            galaxyId: this.empire.homeGalaxyId(),
-            systemId: this.empire.state.homeSystemId,
-            planetId: before.id,
-          });
-        } else {
-          sfxError();
-        }
-      },
-      nextWormhole,
-      claimNextWormhole: () => {
-        const before = this.empire.nextWormholeTarget();
-        if (!before) return;
-        if (this.empire.claimNextWormhole()) {
-          sfxWormhole();
-          this.navigateTo({
-            kind: 'system',
-            galaxyId: this.empire.homeGalaxyId(),
-            systemId: before.id,
-            planetId: null,
-          });
-        } else {
-          sfxError();
-        }
-      },
-      nextIntergalactic,
-      claimNextIntergalactic: () => {
-        const before = this.empire.nextIntergalacticTarget();
-        if (!before) return;
-        if (this.empire.claimNextIntergalactic()) {
-          sfxWormhole();
-          // W9 — fly the player into the freshly claimed extra galaxy so the
-          // T3 reveal lands. Camera leaps across the universe; the cinematic
-          // navigateTo handles the smooth transition.
-          this.navigateTo({
-            kind: 'system',
-            galaxyId: before.galaxy.id,
-            systemId: before.system.id,
-            planetId: null,
-          });
-        } else {
-          sfxError();
-        }
-      },
     };
   }
 
@@ -935,6 +846,22 @@ export class App {
         // when the overlay is closed (render() early-outs).
         this.mapOverlay.render();
       },
+      onOwnershipChanged: () => {
+        // W13 — server-authoritative ownership snapshot mutated. Push the
+        // "taken-by-others" set to the empire engine so its auto-claim
+        // picker skips occupied targets, and refresh visuals.
+        this.refreshExternalOwnership();
+        this.refreshHomeMarkers();
+        this.refreshGalaxyTints();
+        this.mapOverlay.render();
+      },
+      onRoundReset: () => {
+        // W13 — galaxy-wide territory wipe. Empire layer resets, then we
+        // re-run the spawn-claim handshake to land in a fresh home system.
+        // Resources and unlocks survive — the player carries their economy
+        // build into the next 30-min round.
+        this.handleRoundResetMp();
+      },
       onTradeMatched: ({ counterpartName, counterpartColor, asInitiator }) => {
         // W7 — actually run the swap on whichever side initiated. Counterparts
         // get a cosmetic-only banner since their resources don't change here
@@ -967,6 +894,19 @@ export class App {
     // planets / galaxies by their owner and render the players legend.
     this.mapOverlay.setMpClient(this.mpClient);
 
+    // W13 — register the auto-claim authority gate. Empire engine routes
+    // every claim attempt through this so the relay's first-come-first-served
+    // ownership map stays authoritative.
+    const mp = this.mpClient;
+    this.empire.setAutoGate(async (claim) => {
+      const wireKind: 'planet' | 't2-anchor' | 't3-anchor' =
+        claim.kind === 't2-anchor' ? 't2-anchor'
+        : claim.kind === 't3-anchor' ? 't3-anchor'
+        : 'planet';
+      return await mp.requestClaim(claim.targetId, wireKind);
+    });
+    this.refreshExternalOwnership();
+
     const preferred = this.empire.eligibleSpawnSystemIds();
     const persisted = this.empire.state.homeSystemId;
     if (persisted && preferred.includes(persisted)) {
@@ -976,6 +916,89 @@ export class App {
     }
     this.mpClient.claimSystem(preferred);
     this.publishMp();
+  }
+
+  // W13 — push the latest "taken by other players" set into the empire so
+  // its auto-claim engine never targets an occupied planet/system.
+  private refreshExternalOwnership(): void {
+    if (!this.mpClient) return;
+    const own = this.mpClient.getOwnership();
+    const me = this.mpClient.myPlayerId();
+    const taken = new Set<string>();
+    for (const [targetId, ownerId] of Object.entries(own)) {
+      if (ownerId !== me) taken.add(targetId);
+    }
+    this.empire.setExternalOwnership(taken);
+  }
+
+  // W13 — tint each galaxy's bulge by its dominant owner. Counts system-level
+  // ownership; the shader caps the visible blend so palette identity stays
+  // readable even at full ownership. Re-run on every empire emit and every
+  // ownership broadcast so the visual stays current as territory shifts.
+  private refreshGalaxyTints(): void {
+    const ownership: Record<string, string> = this.mpClient?.getOwnership() ?? {};
+    const myId = this.mpClient ? this.mpClient.myPlayerId() : 'self';
+    const myColor = this.session.profile.color;
+
+    for (const [, gh] of this.universe.galaxies) {
+      const systems = gh.data.systems;
+      if (systems.length === 0) {
+        setBulgeOwnerTint(gh.bulge, null, 0);
+        continue;
+      }
+      const counts = new Map<string, number>();
+      for (const s of systems) {
+        const ownerId = ownership[s.id];
+        if (ownerId) {
+          counts.set(ownerId, (counts.get(ownerId) ?? 0) + 1);
+        } else if (this.empire.state.claimedSystems[s.id]) {
+          counts.set(myId, (counts.get(myId) ?? 0) + 1);
+        }
+      }
+      if (counts.size === 0) {
+        setBulgeOwnerTint(gh.bulge, null, 0);
+        continue;
+      }
+      let topId = '';
+      let topCount = 0;
+      for (const [id, c] of counts) {
+        if (c > topCount) { topCount = c; topId = id; }
+      }
+      const strength = topCount / systems.length;
+      let color: string = '#888';
+      if (topId === myId) {
+        color = myColor;
+      } else if (this.mpClient) {
+        const remote = this.mpClient.remotePlayers().find((p) => p.id === topId);
+        if (remote) color = remote.profile.color;
+      }
+      setBulgeOwnerTint(gh.bulge, color, strength);
+    }
+  }
+
+  // W13 — round reset broadcast handler. Wipe territory, navigate to galaxy
+  // view, and re-run the spawn-claim handshake. The empire keeps resources
+  // and unlocks so the player can immediately re-fund the auto-expand drones.
+  private handleRoundResetMp(): void {
+    this.empire.resetForNewRound();
+    this.mpSpawnReady = false;
+    if (this.mpBanner) {
+      this.mpBanner.style.display = 'block';
+      this.mpBanner.textContent = 'Round reset — finding a new spawn…';
+      this.mpBanner.classList.remove('mp-banner-error');
+    }
+    this.refreshExternalOwnership();
+    this.refreshHomeMarkers();
+    if (this.mpClient) {
+      const preferred = this.empire.eligibleSpawnSystemIds();
+      this.mpClient.claimSystem(preferred);
+    }
+    this.navigateTo({
+      kind: 'galaxy',
+      galaxyId: this.empire.homeGalaxyId(),
+      systemId: null,
+      planetId: null,
+    });
   }
 
   private handleSpawnAssigned(systemId: string): void {
@@ -1151,9 +1174,15 @@ export class App {
     //    frame so HUD numbers animate smoothly; the actual save throttling
     //    happens inside Empire.
     this.empire.tick(dt);
+    // W13 — auto-expand drone tick. Picks one target per cadence (1s base,
+    // halved per Auto-Annex Drones tier), routes through the MP gate when
+    // applicable, applies on accept.
+    this.empire.autoClaimTick(dt);
     this.hud.update(dt);
     // W7 — trade cooldown drives the button label/state. Cheap; no save churn.
     this.hud.setTradeCooldown(this.tradeCooldownUntil - Date.now());
+    // W13 — round-reset countdown chip (MP only).
+    this.hud.setRoundCountdown(this.mpClient ? this.mpClient.roundCountdownMs() : null);
     this.upgradePanel.tickLive(performance.now());
     if (this.surface) {
       updateSurface(this.surface, dt, this.empire.computeMetrics());
@@ -1205,37 +1234,6 @@ export class App {
 
     requestAnimationFrame(this.loop);
   };
-}
-
-function canAffordCost(cost: Partial<ResourceBag>, have: ResourceBag): boolean {
-  for (const k of RESOURCE_KEYS) {
-    const need = cost[k];
-    if (need === undefined || need <= 0) continue;
-    if (have[k] < need) return false;
-  }
-  return true;
-}
-
-// Render a cost bag as inline pills, colour-coded per resource. Each pill
-// shows the cost and goes red when the player can't afford that resource —
-// mirrors the upgrade-panel buy-button style so the annex flow feels familiar.
-function formatCostPills(cost: Partial<ResourceBag>, have: ResourceBag): string {
-  const parts: string[] = [];
-  for (const k of RESOURCE_KEYS) {
-    const need = cost[k];
-    if (need === undefined || need <= 0) continue;
-    parts.push(formatPill(k, need, have[k]));
-  }
-  return parts.join('');
-}
-
-function formatPill(k: ResourceKey, need: number, have: number): string {
-  const ok = have >= need;
-  const cls = ok ? 'gx-cost-pill ok' : 'gx-cost-pill short';
-  return `<span class="${cls}" style="--c:${RESOURCE_COLOR[k]}" title="${RESOURCE_LABEL[k]}">`
-    + `<span class="gx-cost-dot"></span>`
-    + `<span class="gx-cost-amt">${formatNumber(need)}</span>`
-    + `</span>`;
 }
 
 function formatNumber(n: number): string {

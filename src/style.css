@@ -459,6 +459,45 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- W13 — Auto-expand "Next" chip ---------- */
+.em-chip-next {
+  --c: #c5e8ff;
+  margin-left: 6px;
+}
+.em-chip-next .em-chip-amount { color: #e8f4ff; }
+.em-chip-next .em-chip-rate {
+  color: #98c8e8;
+  font-variant-numeric: tabular-nums;
+}
+.em-chip-next-ready {
+  --c: #6effb0;
+  box-shadow: 0 0 0 1px rgba(110, 255, 176, 0.35), 0 0 12px rgba(110, 255, 176, 0.18);
+}
+.em-chip-next-ready .em-chip-rate { color: #6effb0; }
+.em-chip-next-waiting {
+  --c: #ffb86e;
+}
+.em-chip-next-waiting .em-chip-rate { color: #ffb86e; }
+
+/* ---------- W13 — Round countdown chip (MP only) ---------- */
+.em-chip-round {
+  --c: #b8a8ff;
+  margin-left: 6px;
+}
+.em-chip-round .em-chip-amount {
+  color: #e0d8ff;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.em-chip-round-soon {
+  --c: #ff7a88;
+  animation: em-chip-pulse 1.2s ease-in-out infinite;
+}
+@keyframes em-chip-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(255, 122, 136, 0.35); }
+  50%      { box-shadow: 0 0 0 1px rgba(255, 122, 136, 0.7), 0 0 12px rgba(255, 122, 136, 0.3); }
+}
+
 /* ---------- Detail panel (right, below HUD bar) ---------- */
 .gx-panel {
   position: absolute;
