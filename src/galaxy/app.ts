@@ -7,6 +7,7 @@ import { CameraController } from './camera-controller';
 import { LabelManager } from './labels';
 import { Picker } from './picking';
 import { UI } from './ui';
+import { MapOverlay } from './map-overlay';
 import { Empire } from '../empire/empire';
 import type { TradeSwap } from '../empire/empire';
 import { ResourceHUD } from '../empire/hud';
@@ -98,6 +99,8 @@ export class App {
   private mpSpawnReady = false;
   private mpLeaderboard: Leaderboard | null = null;
   private portalHint: HTMLDivElement | null = null;
+  private mapOverlay!: MapOverlay;
+  private mapBtn!: HTMLButtonElement;
 
   constructor(host: HTMLDivElement, session: SessionConfig) {
     this.session = session;
@@ -196,6 +199,47 @@ export class App {
     this.refreshHomeMarkers();
     this.ui.render(this.state);
 
+    // W11 — fullscreen 2D map. Mirrors the 3D layer hierarchy and lets the
+    // player click any galaxy / system / planet to fly there. Critical for
+    // multiplayer since 100 galaxies × 200 systems is impossible to scan
+    // by hand.
+    this.mapOverlay = new MapOverlay({
+      host: this.overlay,
+      universe: this.universe,
+      empire: this.empire,
+      session: this.session,
+      navigate: (next) => this.navigateTo(next),
+    });
+    this.mapOverlay.syncToLayer(this.state);
+
+    // Map launcher button. Sits next to the HOME button so the player has
+    // both navigation aids in one place.
+    this.mapBtn = document.createElement('button');
+    this.mapBtn.className = 'gx-map-btn';
+    this.mapBtn.type = 'button';
+    this.mapBtn.title = 'Open map (M)';
+    this.mapBtn.innerHTML = '<span class="gx-map-btn-ico">⊞</span><span>MAP</span>';
+    this.mapBtn.addEventListener('click', () => {
+      sfxClick();
+      this.mapOverlay.toggle();
+    });
+    this.overlay.appendChild(this.mapBtn);
+
+    // Keyboard: M toggles the map, Esc closes it. Ignore key events sourced
+    // from form fields so the start-screen name input still works normally.
+    window.addEventListener('keydown', (e) => {
+      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        sfxClick();
+        this.mapOverlay.toggle();
+      } else if (e.key === 'Escape' && this.mapOverlay.isVisible()) {
+        e.preventDefault();
+        this.mapOverlay.close();
+      }
+    });
+
     // Empire UI: upgrade modal (hidden until launched), then HUD that
     // owns the launcher button.
     this.upgradePanel = new UpgradePanel(this.overlay, this.empire);
@@ -218,6 +262,9 @@ export class App {
       this.rebuildWormholesIfNeeded();
       this.refreshHomeMarkers();
       this.ui.render(this.state);
+      // W11 — own ownership shifted (annex / wormhole / intergalactic). Map
+      // re-renders cheaply if it's closed (early-outs in render()).
+      this.mapOverlay.render();
       this.publishMp();
     });
     this.rebuildSurfaceIfNeeded();
@@ -422,6 +469,7 @@ export class App {
 
     this.state = next;
     this.ui.render(this.state);
+    this.mapOverlay.syncToLayer(this.state);
     this.updatePortalHint();
     // W7/W9 — connection lines render in galaxy + universe view; hidden in
     // system / planet view so they don't streak through the local scene.
@@ -883,6 +931,9 @@ export class App {
         // W7 — remote players' wormhole connections may have appeared or
         // shifted, so rebuild the vortex set as well.
         this.rebuildWormholesIfNeeded();
+        // W11 — keep the map fresh when remote ownership changes. Cheap
+        // when the overlay is closed (render() early-outs).
+        this.mapOverlay.render();
       },
       onTradeMatched: ({ counterpartName, counterpartColor, asInitiator }) => {
         // W7 — actually run the swap on whichever side initiated. Counterparts
@@ -912,6 +963,9 @@ export class App {
       },
     });
     this.mpLeaderboard = new Leaderboard(this.overlay);
+    // W11 — hand the relay client to the map so it can colour systems /
+    // planets / galaxies by their owner and render the players legend.
+    this.mapOverlay.setMpClient(this.mpClient);
 
     const preferred = this.empire.eligibleSpawnSystemIds();
     const persisted = this.empire.state.homeSystemId;

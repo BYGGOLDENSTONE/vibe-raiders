@@ -3,7 +3,9 @@
 > **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 10.1 complete — strict habitable ocean homeworld + globally-unique planet IDs + save self-heal. Spawn picker now requires `type: 'ocean'` (visually habitable green/blue Earth-like) + ≥1 moon + temperate (-30°C..50°C). PLANET_INCOME swapped: ocean → metal+water (was water+gas), rocky → crystal+metal (was metal+water). Picker is randomized per fresh save; eligibleSpawnSystemIds shuffled so MP relay's first-fit lands on different systems each session. Planet/moon IDs are now globally-unique (`<systemId>:p<i>` and `<planetId>:m<i>`) — pre-W10.1 collisions caused HUD income to come from a different system's planet with the same `p2` index. Empire constructor self-heals: invalid homePlanetId/ownedPlanets/claimedSystems entries are scrubbed on load; if home fails the new eligibility filter, it auto-reseeds. Save key bumped: solo `vibecoder.empire.v10`, MP `vibecoder.empire.mp.v5`.
+> **Status:** Wave 11 complete — fullscreen 2D map overlay (Universe / Galaxy / System tabs). Drill-down model: Universe → Galaxy click switches the map tab to that galaxy (no camera move); Galaxy → System click sets a `systemOverride` and switches to System tab (no camera move); System → Planet click is the only "commit" action that flies the camera + closes the map. System tab default is always the player's home — galaxy-map drill-down is the only way to view a remote system. Override clears on close so a fresh open lands back on home. Galaxy map labels each owned system with its owner's name in their colour (drilled-in target gets a white ring); System map keeps every planet's natural colour and shows the owner as a name tag above the body + a thin owner-coloured outline. Pan via drag, zoom via wheel (anchored to cursor). Toggle with the new top-right `⊞ MAP` button or **M** key; **Esc** closes. Cheap re-renders on empire / multiplayer state changes.
+
+> **Wave 10.1 (preserved):** strict habitable ocean homeworld + globally-unique planet IDs + save self-heal. Spawn picker requires `type: 'ocean'` + ≥1 moon + temperate (-30°C..50°C). PLANET_INCOME: ocean → metal+water, rocky → crystal+metal. Picker randomized per fresh save. Planet/moon IDs globally-unique (`<systemId>:p<i>` and `<planetId>:m<i>`). Empire constructor self-heals invalid IDs on load. Save key: solo `vibecoder.empire.v10`, MP `vibecoder.empire.mp.v5`.
 
 > **Wave 10 (preserved):** Full 100-galaxy universe with strict LOD. Cosmetic distant-galaxy billboards (W9's skydome decor) are gone; the 100 procedural galaxies fill that role themselves. Every galaxy carries its own black hole (sized proportionally to disc radius, ratios `inner ≈ radius × 0.0143` / `outer ≈ radius × 0.0857`) and a bulge billboard now lying flat on the galaxy-local XZ plane (matches the actual system disc instead of standing upright). The bulge stays at ~30 % intensity in galaxy view so the spiral structure shows behind the real systems instead of disappearing the moment the player zooms in. LOD: each galaxy has a `systemsGroup` parent for its 200 system meshes; only the active galaxy's `systemsGroup` and black hole are visible / updated, every other galaxy is just its bulge billboard (~99 cheap quads). Labels are also lazy — galaxy labels stay resident, system / planet / moon labels only build for the active galaxy and rebuild on switch. Camera far plane 600k → 2 M; universe view distance 420k → 1.2 M; skydome 70k → 120k. Generation rewrote to position-first / build-system-on-accept so 100 × 200 = 20 000 systems load in ~1-2 s instead of ~30 s. Save key bumped: solo `vibecoder.empire.v8`, MP `vibecoder.empire.mp.v3` (old saves discard).
 
@@ -305,6 +307,53 @@ User feedback after W9:
 
 **Files touched:** `src/galaxy/generation.ts` (procedural 100-galaxy generator + position-first packing + name + palette generators), `src/galaxy/galaxy.ts` (rewritten — `systemsGroup`, `setActiveGalaxy`, every-galaxy black hole, tilt on root), `src/galaxy/bulge.ts` (horizontal orientation + new fade band), `src/galaxy/blackhole.ts` (radius parameter), `src/galaxy/starfield.ts` (skydome size + removed distant galaxies), `src/galaxy/distant-galaxies.ts` (DELETED), `src/galaxy/labels.ts` (lazy per-galaxy label rebuild via `activateGalaxy`), `src/galaxy/app.ts` (far plane, universe distance, `setActiveGalaxy` on navigate, label `activateGalaxy` on navigate, removed distant-galaxies follow), `src/empire/types.ts` (storage keys v8 / mp.v3), `CLAUDE.md` (this entry).
 
+### Wave 11 — fullscreen 2D map overlay (this session)
+
+User feedback after W10.1: with 100 galaxies × 200 systems = 20 000 systems, multiplayer players had no realistic way to find each other in 3D space. W11 adds an in-game map UI that mirrors the 3D layer hierarchy.
+
+**Core idea — drill-down navigation, single-commit camera:**
+
+- The map has three tabs (Universe / Galaxy / System) shown as a top header switcher.
+- Clicks on Universe and Galaxy tabs navigate **within the map**: Universe → click a galaxy → switches to Galaxy tab focused on that galaxy. Galaxy → click a system → switches to System tab showing that system. Camera does NOT move during these drill-downs.
+- The only "commit" action is clicking a planet on the System tab — that flies the camera to the planet AND closes the map.
+- This separation keeps "where am I looking on the map?" decoupled from "where is the camera?". The map becomes a pure navigation aid; the camera only moves when the player explicitly picks a final destination.
+
+**System tab default = home, galaxy-map drill-down overrides:**
+
+- `MapOverlay.systemOverride: string | null` starts null. The effective system shown is `systemOverride ?? empire.state.homeSystemId`.
+- Galaxy-map system click sets the override; closing the map (`Esc` / × / planet-click commit) clears it. So a fresh open of the map always starts at the player's home in the System tab — no surprise context.
+- The drilled-in system gets a white ring on the Galaxy map; the home system keeps its dashed gold "HOME" ring + label so they don't collide.
+
+**Visual encoding:**
+
+- **Universe map** — each galaxy as a disc tinted by its bulge palette, with a **claimed-fraction arc** drawn in the dominant owner's colour (% of that galaxy's systems claimed by anyone, self + remotes). Active galaxy gets a gold ring. Name + percentage drawn underneath.
+- **Galaxy map** — every system as a dot. Owned systems get a coloured glow + bigger marker; the **owner's name** is drawn next to the dot in their colour with a dark text shadow so labels stay legible. Galaxy disc outline as a dashed ring; central black hole as a small purple disc. Home system gets a dashed gold "HOME" badge; drilled-in system gets a solid white ring.
+- **System map** — orbits as concentric rings, planets at their **current orbit angle** (re-rendered at 5 Hz while the System tab is showing so the orbit motion reads as live). Planets keep their natural `primaryColor` — sahiplik, gezegenin etrafına çizilen oyuncu renginde ince çerçeve + gezegenin üstüne yazılan sahip ismi etiketi ile gösterilir (planet keeps its colour; ownership is communicated by an outline + name tag, not by recolouring the body). Star at centre with a radial gradient halo.
+
+**Pan + zoom:**
+
+- Mouse drag pans the map (camX / camY in world units; same coordinate frame as the underlying 3D galaxy / universe).
+- Wheel zooms anchored to the cursor position — world coords under the mouse stay fixed across the zoom step. `camZoom ∈ [0.3, 40]`.
+- "Fit to canvas" base scale is computed from the current layer's extent (universe ~900 k radius, galaxy ~radius, system ~outer planet apoapsis), so each tab opens framed.
+- Click vs pan disambiguation: pan starts on mousedown but only commits if the mouse moved > 4 px before mouseup; otherwise the mouseup is treated as a click and routed through hitTest.
+
+**Lifecycle + perf:**
+
+- Single Canvas2D context. Re-renders on input events, on `empire.subscribe` emits, and on multiplayer `onPlayersChanged` callbacks. A 5 Hz `setInterval` ticks while the System tab is open so planet positions animate; other tabs are static and don't tick.
+- `render()` early-outs when `isOpen === false`, so the empire / multiplayer subscriptions are essentially free when the map is closed.
+- All data needed by the map is already in memory: `universe.data` (positions, palettes), `empire.state` (own ownership), `mpClient.remotePlayers()` (remote ownership). No new data plumbing or relay messages.
+
+**UI surface:**
+
+- Top-right `gx-map-btn` pill ("⊞ MAP") sits next to the existing HOME button.
+- **M** key toggles the overlay; **Esc** closes when open. Both ignore key events sourced from `<input>` / `<textarea>` so the start-screen name field still works.
+- Players legend top-right of the canvas — colour dot + name, with a small "you" tag next to the local player.
+- Hover tooltip follows the cursor (galaxy name, system name + planet count, planet name + type).
+
+**Files touched:** `src/galaxy/map-overlay.ts` (new — full Canvas2D overlay class), `src/galaxy/app.ts` (instance creation, `mapOverlay.syncToLayer()` on every navigate, `setMpClient` after MP setup, M / Esc key handlers, MAP button creation, render hooks in `empire.subscribe` and `onPlayersChanged`), `src/style.css` (button + overlay + tabs + canvas + legend + hover + hint styles), `CLAUDE.md` (this entry).
+
+**No save bump.** W11 is pure UI — empire state shape is unchanged, so existing solo + MP saves carry over without resetting.
+
 ### Wave 9 — multi-galaxy universe (previous session)
 
 The "WOW how did they fit this in HTML" pass. The original ~10k-radius galaxy disc became one of six in a Local Group, with new gameplay (`intergalactic-bridge`) to actually visit the others. Headlines: scale-up of the main galaxy (×2.8 radius, real 3D thickness, bigger black hole), a new `'universe'` LayerKind that frames every galaxy from ~420k out, palette-driven generation so each galaxy looks distinct, intergalactic claim that bulk-adds a foreign galaxy's first system at T3 (×10K).
@@ -485,6 +534,7 @@ gamejam/
 | **W9** | ✅ Complete. Multi-galaxy universe — main galaxy scaled ×2.8 (radius 28k, true 3D thickness), supermassive black hole 4× bigger, new `'universe'` LayerKind framing 6 playable galaxies (Milky Way + Andromeda + Magellan + Sombrero + Pinwheel + Triangulum) with per-palette star/planet weighting + per-galaxy bulge billboards + 6 cosmetic background billboards. New `intergalactic-bridge` Phase-9 unlock and banner claims the closest extra galaxy's first system at T3 (×10K). Number formatter extended through Q/Qa/Qi. Save key bumped to v7 / mp.v2. Server defensively filters spawn claims to `milky-way:` systems. |
 | **W10.1** | ✅ Complete. Habitable-ocean spawn rules: spawn picker filters `type==='ocean' + ≥1 moon + temperate (-30..50°C)`, randomized; ocean income swapped to metal+water, rocky to crystal+metal. Planet/moon IDs are globally-unique (`<systemId>:p<i>`) so `findPlanet` no longer collides across the 20 000 systems in the universe. Empire constructor self-heals invalid homePlanetId/ownedPlanets/claimedSystems on load. Save bumped solo `v10` / MP `mp.v5`. |
 | **W10** | ✅ Complete. Full 100-galaxy universe — 99 procedural extras (random positions on a Fibonacci shell 250k-900k from origin, random palette / radius 7k-22k / tilt / name) + the Milky Way at origin. Every galaxy now has its own black hole (scaled to disc radius). Bulge billboard rotated to horizontal so it shares a plane with the actual systems, fade band tuned to keep ~30 % intensity in galaxy view. Cosmetic distant-galaxy billboards deleted (the 100 procedural galaxies fill that role). LOD: only the active galaxy's `systemsGroup` + black hole are visible / updated; labels also lazy-rebuild per active galaxy. Camera far plane 2M; universe view 1.2M out. Position-first generation packs 20 000 systems in ~1-2 s. Save key bumped to v8 / mp.v3. |
+| **W11** | ✅ Complete. Fullscreen 2D map overlay (Universe / Galaxy / System tabs, Canvas2D). Drill-down model: Universe → Galaxy → System clicks navigate within the map only; only a System-tab planet click flies the camera + closes the map. System tab default = home; galaxy-map system click sets a temporary `systemOverride` that clears on close. Galaxy map labels each owned system with its owner's name in their colour; System map preserves planet colours and shows ownership via outline + name tag. Pan via drag, wheel zoom anchored to cursor. Toggle with top-right `⊞ MAP` button or `M` key; `Esc` closes. No save bump. |
 
 Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live constants: `PLANET_INCOME`, `SYNERGY_PER_PLANET = 0.2`, `SYSTEM_TIER_BASE = 100`, `MOON_OUTPOST_INCOME = 5/s crystal`, `BASE_STORAGE_CAP = 1500`, `PROD_MUL_PER_TIER`, milestone costs in `src/empire/upgrades.ts` `expSteps`. W5 annex: `SYSTEM_PLANET_CLAIM_BASE = {metal:5000, water:3000, crystal:2000}`, `SYSTEM_PLANET_CLAIM_GROWTH = 1.6` in `src/empire/empire.ts`. W7 wormhole: `WORMHOLE_CLAIM_COST = {metal:5M, water:3M, crystal:2M}` in `src/empire/empire.ts`. W7 trade: 20% give / 50% return (2:1 ratio), 60 s client cooldown / 30 s server in `partykit/server.ts:TRADE_COOLDOWN_MS`. Wave 4-B visuals: `DOME_DIAMETER_FRAC`, `TETHER_RADIUS_FRAC`, `SHUTTLE_COUNT`, `SHUTTLE_BASE_SPEED` in `src/empire/moon-outpost.ts`. W9 intergalactic: `INTERGALACTIC_CLAIM_COST` in `src/empire/empire.ts`; satellite-galaxy positions / radii / palettes in `src/galaxy/generation.ts:generateUniverse`; bulge fade band 1.8×-6× radius in `src/galaxy/bulge.ts:updateBulge`.
 
