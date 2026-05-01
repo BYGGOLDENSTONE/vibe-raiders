@@ -167,12 +167,14 @@ export interface EmpireState {
   lastSavedAt: number;
 }
 
-// W9 — bumped from v6: galaxy-prefixed system IDs + new claimedSystems entries
-// for T3/T4. Old saves auto-discard so the multi-galaxy bootstrap takes hold.
-export const STORAGE_KEY_SOLO = 'vibecoder.empire.v7';
+// W10 — bumped from v7: 100-galaxy universe means every system ID prefix and
+// position rolled forward, so older saves' homeSystemId / claimedSystems
+// references are stale. Old saves auto-discard so the new universe takes hold
+// cleanly.
+export const STORAGE_KEY_SOLO = 'vibecoder.empire.v8';
 // W6 — multiplayer keeps a separate save so the solo career isn't disturbed
-// when the player drops into a shared galaxy and back. Also bumped for W9.
-export const STORAGE_KEY_MP = 'vibecoder.empire.mp.v2';
+// when the player drops into a shared galaxy and back. Also bumped for W10.
+export const STORAGE_KEY_MP = 'vibecoder.empire.mp.v3';
 
 // Game mode determines which save slot is used and whether multiplayer state
 // is wired up. Selected on the start screen and threaded through Empire +

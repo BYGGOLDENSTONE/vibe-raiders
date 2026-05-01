@@ -3,7 +3,7 @@
 > **Game title:** The Vibecoder's Guide to the Galaxy.
 > **Submission target:** Cursor Vibe Jam 2026.
 > **Repo:** https://github.com/BYGGOLDENSTONE/vibe-raiders
-> **Status:** Wave 9 complete — multi-galaxy universe. The galaxy is now one of six in a "Local Group". Disk scaled up ×2.8 (radius 28 000), thickness 120 → 1800 so the disc reads as a true 3D structure, supermassive black hole inner/outer 160/900 → 400/2400, skydome 24k → 70k, camera far plane 38k → 600k. New `'universe'` LayerKind frames every galaxy from ~420k out — 5 satellite galaxies (Andromeda / Magellan / Sombrero / Pinwheel / Triangulum) generated with palette-driven star + planet weighting, each at its own world position 100k-220k from the main galaxy with a unique tilt. Each galaxy has a procedural log-spiral bulge billboard that fades in past 1.8× radius and is the universe-view click target. 6 cosmetic background-galaxy billboards still ride the skydome shell for extra "WOW the void is full" feel. New Phase 9 unlock — `intergalactic-bridge` (cost 100M/60M/40M MWC + 5M each of the rare four) — surfaces an "Intergalactic Bridge" banner once Trade Hub is unlocked. Bridge claims the closest extra galaxy's first rocky+moon system at T3 (×10K multiplier; cost 500M/300M/200M MWC + 50M each of the rare four), bulk-adding all its planets to ownedPlanets and drawing a long additive connection line across the universe view from home to T3. Number formatter extended through T/Q/Qa/Qi for the post-T3 economy. Save key bumped: solo `vibecoder.empire.v7`, MP `vibecoder.empire.mp.v2` (old saves discard). Server defensively rejects spawn claims for non-`milky-way:` systems.
+> **Status:** Wave 10 complete — full 100-galaxy universe with strict LOD. Cosmetic distant-galaxy billboards (W9's skydome decor) are gone; the 100 procedural galaxies fill that role themselves. Every galaxy carries its own black hole (sized proportionally to disc radius, ratios `inner ≈ radius × 0.0143` / `outer ≈ radius × 0.0857`) and a bulge billboard now lying flat on the galaxy-local XZ plane (matches the actual system disc instead of standing upright). The bulge stays at ~30 % intensity in galaxy view so the spiral structure shows behind the real systems instead of disappearing the moment the player zooms in. LOD: each galaxy has a `systemsGroup` parent for its 200 system meshes; only the active galaxy's `systemsGroup` and black hole are visible / updated, every other galaxy is just its bulge billboard (~99 cheap quads). Labels are also lazy — galaxy labels stay resident, system / planet / moon labels only build for the active galaxy and rebuild on switch. Camera far plane 600k → 2 M; universe view distance 420k → 1.2 M; skydome 70k → 120k. Generation rewrote to position-first / build-system-on-accept so 100 × 200 = 20 000 systems load in ~1-2 s instead of ~30 s. Save key bumped: solo `vibecoder.empire.v8`, MP `vibecoder.empire.mp.v3` (old saves discard).
 
 ---
 
@@ -257,7 +257,53 @@ The first audio pass. SFX are 100 % WebAudio-synthesised (no asset files), per t
 
 **Save:** new `localStorage` key `vibecoder.audio.v1`. Independent from the empire / session keys; clearing the change-profile session does not reset audio settings (intentional — the player's volume preference shouldn't snap back when they switch modes).
 
-### Wave 9 — multi-galaxy universe (this session)
+### Wave 10 — full 100-galaxy universe + LOD (this session)
+
+User feedback after W9:
+1. "Distant" cosmetic galaxies in the skydome shouldn't be there — every galaxy in the view should be reachable.
+2. Every galaxy needs a black hole, not just the main one.
+3. Galaxy count up to 100, ~200 systems per galaxy.
+4. Bulge billboard was standing upright, should lie flat to match the actual systems, and should stay visible at galaxy-view distance instead of fading to zero.
+
+**Procedural 100-galaxy generator (`generation.ts`):**
+
+- `generateUniverse(seed)` now builds the main galaxy at origin (Milky Way, hand-tuned `MAIN_PALETTE`) plus 99 procedural extras placed on a Fibonacci-sphere shell at distances 250 k – 900 k from origin. Each extra carries a random radius (7 k – 22 k), random palette (`randomPalette()` picks warm vs cool tone, biases 1-2 star classes + 1-2 planet types, randomises arms 2-6 / twist / thickness), random 3D tilt (full ±π on all three axes), and a name pulled from `NAMED_GALAXIES` (~18 % chance) or composed from `GALAXY_GREEK + GALAXY_REGIONS` / catalogue prefixes (NGC / IC / UGC / M / Caldwell). Same seed → same 100-galaxy layout.
+- Per-galaxy generation moved to position-first: 60 attempts × `systemCount` per slot, cheap distance-only collision check using a constant 700-unit minimum separation. Full system generation only runs for accepted positions, so 100 × 200 = 20 000 systems are produced in ~1 – 2 s instead of ~30 s. Pack density is slightly looser than W9's extent-aware packing but visually indistinguishable.
+- `systemOuterExtent` (used only by the W9 packer) deleted.
+- The named W9 satellites (Andromeda / Magellan / Sombrero / Pinwheel / Triangulum) are now elements in `NAMED_GALAXIES`; their hand-curated palettes are gone since `randomPalette()` produces equivalent variety.
+
+**Black hole per galaxy (`blackhole.ts` + `galaxy.ts`):**
+
+- `makeBlackHole(galaxyRadius = 28000)` accepts a per-galaxy radius and scales `inner = radius × 0.0143`, `outer = radius × 0.0857`. A 9 k-radius satellite gets a proportional ~130 / 770 disc, the 28 k Milky Way keeps the original 400 / 2400.
+- Every galaxy builds one and stores it on `GalaxyHandle.blackHole`. The `UniverseHandle.blackHole` field still re-exports the home galaxy's black hole so the existing Vibe Jam portal-pick proxy logic doesn't have to change.
+
+**Horizontal bulge + galaxy-view visibility (`bulge.ts`):**
+
+- Plane mesh now lies flat (`rotation.x = -π/2`) in galaxy-local space — i.e. on the same XZ plane the systems live on. Per-galaxy tilt is applied to `galaxy.root` instead, so the bulge and the real stars rotate together and stay coplanar.
+- Fade band changed from "fully bright far / zero at galaxy view (1.8× radius)" to "fully bright at 4× radius / ~30 % at galaxy view / zero at 0.4× radius". The active galaxy's bulge now stays visible behind its actual systems in galaxy view instead of disappearing the moment you arrive.
+- Pick proxy stays clickable down to ~25 % intensity so the player can still hop between galaxies from inside another galaxy.
+
+**LOD architecture (`galaxy.ts` + labels + app):**
+
+- `GalaxyHandle.systemsGroup: THREE.Group` is a single parent for all 200 system meshes per galaxy. `setActiveGalaxy(universe, galaxyId)` toggles `systemsGroup.visible` (and `blackHole.group.visible`) so only the active galaxy is drawn. `updateUniverse` skips inactive galaxies entirely except for their bulge fade tick. `updateBlackHole` only runs for the active galaxy.
+- `app.navigateTo` calls `setActiveGalaxy(this.universe, next.galaxyId)` whenever the destination layer carries a galaxy id, so flying into another galaxy's system instantly reveals its 200-star disc and hides the previous galaxy's.
+- `LabelManager` now keeps galaxy labels resident (~100 nodes) but builds system / planet / moon labels lazily for the active galaxy only. `LabelManager.activateGalaxy(galaxyId)` drops the previous galaxy's per-system labels (calling `el.remove()`) and creates fresh ones. Last-applied home-marker opts are stashed and replayed onto the new labels so badges (★ HOME, ✓, ANNEX, etc.) survive the switch.
+- Galactic-rotation tick (the slow `dt * 0.010` Y spin) moved from `gh.root` to `gh.systemsGroup` so it doesn't clash with the per-galaxy tilt baked into root.
+
+**Camera + skydome (`app.ts` + `starfield.ts`):**
+
+- Camera far plane 600 k → 2 M.
+- Universe view distance 420 k → 1.2 M; min/max 80 k / 540 k → 200 k / 1.7 M.
+- Skydome 70 k → 120 k (so it always envelops the universe view); star layer radii bumped proportionally (95 k / 65 k / 42 k).
+- Cosmetic `distant-galaxies.ts` deleted; `BackgroundHandle.distantGalaxies` removed; the per-frame skydome / star-layer follow-camera code drops the now-missing distant-galaxies position copy.
+
+**Save key bump:**
+
+- Solo `vibecoder.empire.v7` → `v8`. MP `vibecoder.empire.mp.v2` → `v3`. Old saves auto-discard so the new universe shape (different system IDs, different positions, more galaxies) takes hold cleanly.
+
+**Files touched:** `src/galaxy/generation.ts` (procedural 100-galaxy generator + position-first packing + name + palette generators), `src/galaxy/galaxy.ts` (rewritten — `systemsGroup`, `setActiveGalaxy`, every-galaxy black hole, tilt on root), `src/galaxy/bulge.ts` (horizontal orientation + new fade band), `src/galaxy/blackhole.ts` (radius parameter), `src/galaxy/starfield.ts` (skydome size + removed distant galaxies), `src/galaxy/distant-galaxies.ts` (DELETED), `src/galaxy/labels.ts` (lazy per-galaxy label rebuild via `activateGalaxy`), `src/galaxy/app.ts` (far plane, universe distance, `setActiveGalaxy` on navigate, label `activateGalaxy` on navigate, removed distant-galaxies follow), `src/empire/types.ts` (storage keys v8 / mp.v3), `CLAUDE.md` (this entry).
+
+### Wave 9 — multi-galaxy universe (previous session)
 
 The "WOW how did they fit this in HTML" pass. The original ~10k-radius galaxy disc became one of six in a Local Group, with new gameplay (`intergalactic-bridge`) to actually visit the others. Headlines: scale-up of the main galaxy (×2.8 radius, real 3D thickness, bigger black hole), a new `'universe'` LayerKind that frames every galaxy from ~420k out, palette-driven generation so each galaxy looks distinct, intergalactic claim that bulk-adds a foreign galaxy's first system at T3 (×10K).
 
@@ -377,9 +423,8 @@ gamejam/
 │   │   ├── star.ts
 │   │   ├── planet.ts
 │   │   ├── system.ts
-│   │   ├── galaxy.ts               Wave-9 — UniverseHandle wraps multiple GalaxyHandle, flat system lookup
-│   │   ├── distant-galaxies.ts     Wave-9 — 6 cosmetic spiral-galaxy billboards on the skydome shell
-│   │   ├── bulge.ts                Wave-9 — per-galaxy procedural bulge billboard + universe-view click proxy
+│   │   ├── galaxy.ts               Wave-9/10 — UniverseHandle, per-galaxy black hole, LOD via setActiveGalaxy
+│   │   ├── bulge.ts                Wave-9/10 — horizontal bulge billboard, stays visible in galaxy view
 │   │   ├── labels.ts               + Wave-9 galaxy labels for universe view
 │   │   ├── picking.ts              + Wave-9 'galaxy' kind for bulge picking
 │   │   ├── wormhole.ts             Wave-7 — vortex shader billboard at connected systems
@@ -436,6 +481,7 @@ gamejam/
 | **W7** | ✅ Complete. Wormhole annex banner (`5M/3M/2M cost`, closest-unclaimed target, T2 ×100 multiplier on bulk-claim) + violet vortex shader at every connected system + galaxy-view connection lines per owner + Trade Hub auto-trade (2:1 most-abundant → least-abundant, 60 s cooldown, MP relay matchmaking with NPC fallback). |
 | **W8** | ✅ Complete. Procedural WebAudio SFX (buy / annex / wormhole / trade / layer transition / click / error) + MP3 background music streamed through a music gain bus + bottom-right gear button opening a Master / Music / SFX volume modal. Persists to `vibecoder.audio.v1`. Music auto-plays after the first user gesture (browser autoplay policy). |
 | **W9** | ✅ Complete. Multi-galaxy universe — main galaxy scaled ×2.8 (radius 28k, true 3D thickness), supermassive black hole 4× bigger, new `'universe'` LayerKind framing 6 playable galaxies (Milky Way + Andromeda + Magellan + Sombrero + Pinwheel + Triangulum) with per-palette star/planet weighting + per-galaxy bulge billboards + 6 cosmetic background billboards. New `intergalactic-bridge` Phase-9 unlock and banner claims the closest extra galaxy's first system at T3 (×10K). Number formatter extended through Q/Qa/Qi. Save key bumped to v7 / mp.v2. Server defensively filters spawn claims to `milky-way:` systems. |
+| **W10** | ✅ Complete. Full 100-galaxy universe — 99 procedural extras (random positions on a Fibonacci shell 250k-900k from origin, random palette / radius 7k-22k / tilt / name) + the Milky Way at origin. Every galaxy now has its own black hole (scaled to disc radius). Bulge billboard rotated to horizontal so it shares a plane with the actual systems, fade band tuned to keep ~30 % intensity in galaxy view. Cosmetic distant-galaxy billboards deleted (the 100 procedural galaxies fill that role). LOD: only the active galaxy's `systemsGroup` + black hole are visible / updated; labels also lazy-rebuild per active galaxy. Camera far plane 2M; universe view 1.2M out. Position-first generation packs 20 000 systems in ~1-2 s. Save key bumped to v8 / mp.v3. |
 
 Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live constants: `PLANET_INCOME`, `SYNERGY_PER_PLANET = 0.2`, `SYSTEM_TIER_BASE = 100`, `MOON_OUTPOST_INCOME = 5/s crystal`, `BASE_STORAGE_CAP = 1500`, `PROD_MUL_PER_TIER`, milestone costs in `src/empire/upgrades.ts` `expSteps`. W5 annex: `SYSTEM_PLANET_CLAIM_BASE = {metal:5000, water:3000, crystal:2000}`, `SYSTEM_PLANET_CLAIM_GROWTH = 1.6` in `src/empire/empire.ts`. W7 wormhole: `WORMHOLE_CLAIM_COST = {metal:5M, water:3M, crystal:2M}` in `src/empire/empire.ts`. W7 trade: 20% give / 50% return (2:1 ratio), 60 s client cooldown / 30 s server in `partykit/server.ts:TRADE_COOLDOWN_MS`. Wave 4-B visuals: `DOME_DIAMETER_FRAC`, `TETHER_RADIUS_FRAC`, `SHUTTLE_COUNT`, `SHUTTLE_BASE_SPEED` in `src/empire/moon-outpost.ts`. W9 intergalactic: `INTERGALACTIC_CLAIM_COST` in `src/empire/empire.ts`; satellite-galaxy positions / radii / palettes in `src/galaxy/generation.ts:generateUniverse`; bulge fade band 1.8×-6× radius in `src/galaxy/bulge.ts:updateBulge`.
 
@@ -448,8 +494,8 @@ Tunables for ongoing balance: see `docs/balance.csv` for the full audit. Live co
 - Commit only when user explicitly approves.
 - Update this file after each completed phase so future sessions can resume.
 - Storage keys to know:
-  - `vibecoder.empire.v6` — solo empire state.
-  - `vibecoder.empire.mp.v1` — multiplayer empire state (separate slot, fresh on first MP launch).
+  - `vibecoder.empire.v8` — solo empire state.
+  - `vibecoder.empire.mp.v3` — multiplayer empire state (separate slot, fresh on first MP launch).
   - `vibecoder.mp.session.v1` — current mode + profile + optional `portalRef`. Cleared by the "↻ change profile" link.
   - `vibecoder.mp.playerId.v1` — stable per-browser identity for the relay. Reusing this means refresh keeps the same spawn system and owned planets.
   - `vibecoder.empire.panelWidth.v2` — legacy panel width (unused after W2 redesign, can be deleted).

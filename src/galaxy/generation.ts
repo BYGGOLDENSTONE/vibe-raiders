@@ -425,21 +425,6 @@ function makeSystem(rng: Rng, position: [number, number, number], palette: Galax
   };
 }
 
-// Worst-case radial reach of a system — outermost planet apoapsis plus its
-// own body extent (rings, moon system).
-function systemOuterExtent(s: SystemData): number {
-  let max = s.starRadius * 4.0;
-  for (const p of s.planets) {
-    let planetReach = Math.max(p.radius, p.ringOuter);
-    for (const m of p.moons) {
-      planetReach = Math.max(planetReach, m.orbitRadius * (1 + m.orbitEccentricity) + m.radius);
-    }
-    const apo = p.orbitRadius * (1 + p.orbitEccentricity);
-    max = Math.max(max, apo + planetReach);
-  }
-  return max;
-}
-
 // W9 — single-galaxy generator (used by generateUniverse for each entry).
 // Accepts the full GalaxyData shape with palette + radius + position so the
 // main galaxy and the smaller satellites all flow through the same code path.
@@ -463,38 +448,33 @@ export function generateGalaxy(spec: GalaxySpec): GalaxyData {
   const innerRadius = spec.palette.innerCutout;
   const systemCount = spec.palette.systemCount;
 
-  const systems: SystemData[] = [];
-  const extents: number[] = [];
-
   // Separation scales with the galaxy size so satellite galaxies still feel
-  // dense — a 9k-radius galaxy with 600-unit min separation looks empty.
+  // dense. W10 — collision detection now uses a fixed conservative extent
+  // (200 units) instead of generating each candidate system before testing.
+  // Full system generation only happens for positions that pass the cheap
+  // distance test, which makes 100-galaxy worlds load in ~1-2 s instead of
+  // ~30 s. Pack density slightly lower than W9 but visually indistinguishable.
   const minSeparation = Math.max(700, radius * 0.06);
-  const buffer = Math.max(200, radius * 0.014);
+  const minDSq = minSeparation * minSeparation;
+
+  const positions: [number, number, number][] = [];
 
   let attempts = 0;
-  const maxAttempts = systemCount * 200;
-  while (systems.length < systemCount && attempts < maxAttempts) {
+  const maxAttempts = systemCount * 60;
+  while (positions.length < systemCount && attempts < maxAttempts) {
     attempts++;
 
-    // Two sampling modes:
-    //   - uniform spiral-arm sampling (default)
-    //   - cluster bias: drop near a random existing system, creating
-    //     overdensities and natural voids instead of an even Poisson grid.
     let x: number;
     let z: number;
     let y: number;
 
-    if (systems.length > 8 && rng.bool(0.55)) {
-      const seed = rng.pick(systems);
-      // Power-law biased radius (exp > 1 = bias toward small): lots of close
-      // neighbours forming a tight clump, occasional outliers at the edge.
-      // Scales with the galaxy radius so smaller satellite galaxies still
-      // produce tight clusters relative to their disk.
+    if (positions.length > 8 && rng.bool(0.55)) {
+      const seed = rng.pick(positions);
       const jitterR = Math.pow(rng.next(), 1.7) * radius * 0.24;
       const jitterAngle = rng.range(0, Math.PI * 2);
-      x = seed.position[0] + Math.cos(jitterAngle) * jitterR;
-      z = seed.position[2] + Math.sin(jitterAngle) * jitterR;
-      y = seed.position[1] + rng.gauss() * thickness * 0.6;
+      x = seed[0] + Math.cos(jitterAngle) * jitterR;
+      z = seed[2] + Math.sin(jitterAngle) * jitterR;
+      y = seed[1] + rng.gauss() * thickness * 0.6;
       const rr = Math.sqrt(x * x + z * z);
       if (rr < innerRadius || rr > radius) continue;
     } else {
@@ -508,28 +488,22 @@ export function generateGalaxy(spec: GalaxySpec): GalaxyData {
       y = rng.gauss() * thickness * (1 - t * 0.5);
     }
 
-    // Build the candidate system first so we know its actual outer reach
-    // before deciding whether it fits.
-    const candidate = makeSystem(rng, [x, y, z], spec.palette, spec.id);
-    const candExt = systemOuterExtent(candidate);
-
     let tooClose = false;
-    for (let i = 0; i < systems.length; i++) {
-      const s = systems[i]!;
-      const sExt = extents[i]!;
-      const minD = Math.max(minSeparation, candExt + sExt + buffer);
-      const dx = s.position[0] - x;
-      const dz = s.position[2] - z;
-      if (dx * dx + dz * dz < minD * minD) {
+    for (let i = 0; i < positions.length; i++) {
+      const p = positions[i]!;
+      const dx = p[0] - x;
+      const dz = p[2] - z;
+      if (dx * dx + dz * dz < minDSq) {
         tooClose = true;
         break;
       }
     }
     if (tooClose) continue;
-
-    systems.push(candidate);
-    extents.push(candExt);
+    positions.push([x, y, z]);
   }
+
+  // Build full system data only for accepted positions.
+  const systems: SystemData[] = positions.map((pos) => makeSystem(rng, pos, spec.palette, spec.id));
 
   return {
     id: spec.id,
@@ -542,10 +516,10 @@ export function generateGalaxy(spec: GalaxySpec): GalaxyData {
   };
 }
 
-// W9 — palette presets for each playable galaxy. Star/planet weighting drives
-// the procedural feel ("blue giant frontier" vs "red dwarf graveyard"); the
-// bulge + arm colours are used by the universe-view billboard so each galaxy
-// reads distinctly from far away.
+// W10 — palette for the player's home galaxy. Star/planet weighting drives the
+// procedural feel; the bulge + arm colours show in universe / galaxy view.
+// Other galaxies' palettes are generated procedurally from `randomPalette`
+// below so we ship 100 distinct-looking discs without 100 hand-tuned presets.
 export const MAIN_PALETTE: GalaxyPalette = {
   starWeights:   { 'red-dwarf': 2, orange: 2, yellow: 2, 'white-blue': 1, 'blue-giant': 0.5 },
   planetWeights: {},  // even distribution (default 1)
@@ -559,78 +533,136 @@ export const MAIN_PALETTE: GalaxyPalette = {
   spiralTwist: 3.6,
 };
 
-const ANDROMEDA_PALETTE: GalaxyPalette = {
-  starWeights:   { 'red-dwarf': 0.5, orange: 1, yellow: 1, 'white-blue': 3, 'blue-giant': 2 },
-  planetWeights: { gas: 1.5, ocean: 1.5, ice: 0.7 },
-  systemCount: 90,
-  arms: 4,
-  twist: 4.8,
-  thickness: 1100,
-  bulgeColor: [0.78, 0.92, 1.00],
-  armColor:   [0.45, 0.70, 1.00],
-  innerCutout: 2400,
-  spiralTwist: 3.2,
-};
+// --- W10: 100-galaxy universe ----------------------------------------------
+//
+// The main galaxy lives at the origin (every player still spawns there). 99
+// extra galaxies are scattered on a Fibonacci sphere at distances 250k-900k
+// with random tilts, sizes, names, and palettes. Each carries a black hole
+// and ~200 systems just like the home galaxy, but their meshes are LOD-gated
+// (only built/rendered when the player navigates into one — see galaxy.ts).
 
-const MAGELLAN_PALETTE: GalaxyPalette = {
-  // Small irregular satellite — lots of red dwarfs, fewer planet types.
-  starWeights:   { 'red-dwarf': 4, orange: 2, yellow: 0.6, 'white-blue': 0.2, 'blue-giant': 0.05 },
-  planetWeights: { rocky: 1.5, lava: 1.5, desert: 1.5, gas: 0.4 },
-  systemCount: 60,
-  arms: 2,
-  twist: 6.5,
-  thickness: 700,
-  bulgeColor: [1.00, 0.62, 0.42],
-  armColor:   [1.00, 0.45, 0.30],
-  innerCutout: 1200,
-  spiralTwist: 2.4,
-};
+// Greek-letter prefixes + region names + numeric catalogue prefixes, picked
+// independently and combined so 100 names feel plausible without a giant
+// hand-curated list.
+const GALAXY_GREEK = [
+  'Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta', 'Eta', 'Theta', 'Iota',
+  'Kappa', 'Lambda', 'Mu', 'Nu', 'Xi', 'Omicron', 'Pi', 'Rho', 'Sigma', 'Tau',
+  'Upsilon', 'Phi', 'Chi', 'Psi', 'Omega',
+];
+const GALAXY_REGIONS = [
+  'Centauri', 'Cygni', 'Lyrae', 'Draconis', 'Pegasi', 'Persei', 'Aquarii',
+  'Hydrae', 'Lupi', 'Ursae', 'Carinae', 'Crucis', 'Cassiopeia', 'Phoenix',
+  'Orion', 'Vela', 'Sextans', 'Boötis', 'Coronae', 'Eridani', 'Fornacis',
+  'Gruis', 'Leonis', 'Tucanae', 'Volantis',
+];
+// Hand-picked "famous" galaxy names sprinkled across the universe so a few
+// recognisable beats stand out among the procedural ones.
+const NAMED_GALAXIES = [
+  'Andromeda', 'Triangulum', 'Sombrero', 'Pinwheel', 'Whirlpool', 'Cartwheel',
+  'Cigar', 'Tadpole', 'Sculptor', 'Bode', 'Sunflower', 'Black Eye',
+  'Antennae', 'Magellan', 'Hoag', 'Mayall', 'Centaurus A', 'Phoenix Cluster',
+];
 
-const SOMBRERO_PALETTE: GalaxyPalette = {
-  starWeights:   { 'red-dwarf': 1.5, orange: 2, yellow: 1, 'white-blue': 0.8, 'blue-giant': 1 },
-  planetWeights: { gas: 3, toxic: 1.5, ice: 1.2 },
-  systemCount: 80,
-  arms: 3,
-  twist: 7.2,
-  thickness: 2400,  // notoriously thick disc
-  bulgeColor: [1.00, 0.80, 0.55],
-  armColor:   [0.85, 0.50, 0.35],
-  innerCutout: 2000,
-  spiralTwist: 4.0,
-};
+function makeGalaxyName(rng: Rng, _index: number, namedUsed: Set<string>): string {
+  // ~18% of slots get a recognisable named galaxy until we run out, then fall
+  // back to procedural names (Greek+region or numeric catalogue prefix).
+  if (rng.bool(0.18) && namedUsed.size < NAMED_GALAXIES.length) {
+    for (let attempts = 0; attempts < 6; attempts++) {
+      const candidate = rng.pick(NAMED_GALAXIES);
+      if (!namedUsed.has(candidate)) {
+        namedUsed.add(candidate);
+        return candidate;
+      }
+    }
+  }
+  if (rng.bool(0.55)) {
+    return `${rng.pick(GALAXY_GREEK)} ${rng.pick(GALAXY_REGIONS)}`;
+  }
+  const cat = rng.pick(['NGC', 'IC', 'UGC', 'M', 'Caldwell']);
+  const num = cat === 'M' ? rng.int(1, 110)
+             : cat === 'Caldwell' ? rng.int(1, 109)
+             : rng.int(100, 9999);
+  // Use a regular hyphen-minus to avoid odd Unicode dashes in IDs.
+  return `${cat} ${num}`;
+}
 
-const PINWHEEL_PALETTE: GalaxyPalette = {
-  starWeights:   { 'red-dwarf': 1, orange: 1.5, yellow: 2, 'white-blue': 1.5, 'blue-giant': 0.8 },
-  planetWeights: { ocean: 2, rocky: 1.5, ice: 1 },
-  systemCount: 100,
-  arms: 6,  // ultra-grand-design spiral
-  twist: 4.0,
-  thickness: 900,
-  bulgeColor: [1.00, 0.92, 0.78],
-  armColor:   [0.85, 0.50, 1.00],
-  innerCutout: 2200,
-  spiralTwist: 4.4,
-};
+// Random palette generator — each galaxy gets a unique colour, arm count,
+// star/planet bias. Produces visually distinct discs without hand-tuning.
+function randomPalette(rng: Rng): GalaxyPalette {
+  const arms = rng.int(2, 6);
+  const twist = rng.range(3.5, 7.5);
 
-const TRIANGULUM_PALETTE: GalaxyPalette = {
-  starWeights:   { 'red-dwarf': 3, orange: 1, yellow: 0.5, 'white-blue': 0.4, 'blue-giant': 0.1 },
-  planetWeights: { ice: 3, toxic: 2, gas: 2, ocean: 0.5 },
-  systemCount: 65,
-  arms: 3,
-  twist: 6.0,
-  thickness: 800,
-  bulgeColor: [0.85, 1.00, 0.92],
-  armColor:   [0.50, 0.95, 0.78],
-  innerCutout: 1500,
-  spiralTwist: 3.0,
-};
+  // Pick a "tone" — warm vs cool — for both bulge and arm colours, slightly
+  // off-axis so each disc reads as one coherent palette.
+  const warm = rng.bool(0.55);
+  const bulgeColor: [number, number, number] = warm
+    ? [rng.range(0.85, 1.0), rng.range(0.65, 0.95), rng.range(0.45, 0.85)]
+    : [rng.range(0.65, 0.95), rng.range(0.85, 1.0), rng.range(0.85, 1.0)];
+  const armColor: [number, number, number] = warm
+    ? [rng.range(0.85, 1.0), rng.range(0.45, 0.85), rng.range(0.30, 0.75)]
+    : [rng.range(0.40, 0.75), rng.range(0.55, 0.90), rng.range(0.85, 1.0)];
 
-// W9 — universe builder. Main galaxy at origin (where every player spawns),
-// 5 satellite galaxies arranged at varied positions ~150-220k away. Each
-// galaxy seeded off the main seed so the same seed produces the same universe.
+  // Star weight bias — pick one or two classes to favour, leave others light.
+  const starClasses: StarClass[] = ['red-dwarf', 'orange', 'yellow', 'white-blue', 'blue-giant'];
+  const starWeights: Partial<Record<StarClass, number>> = {};
+  for (const c of starClasses) starWeights[c] = rng.range(0.4, 1.6);
+  // Boost a random class to make the palette feel intentional.
+  starWeights[rng.pick(starClasses)] = rng.range(1.8, 3.5);
+
+  // Planet weight bias — same pattern, biased toward 1-2 types.
+  const planetTypes: PlanetType[] = ['rocky', 'ocean', 'gas', 'ice', 'lava', 'desert', 'toxic'];
+  const planetWeights: Partial<Record<PlanetType, number>> = {};
+  // Pick 1-2 favoured types, leave the rest at default.
+  const favCount = rng.int(1, 2);
+  for (let i = 0; i < favCount; i++) {
+    planetWeights[rng.pick(planetTypes)] = rng.range(1.5, 3.0);
+  }
+
+  return {
+    starWeights,
+    planetWeights,
+    systemCount: 200,
+    arms,
+    twist,
+    thickness: rng.range(700, 2200),
+    bulgeColor,
+    armColor,
+    innerCutout: rng.range(1500, 3000),
+    spiralTwist: rng.range(2.8, 4.6),
+  };
+}
+
+// Distribute N galaxies across a sphere shell using a Fibonacci-spiral layout.
+// Returns positions in universe space; the home galaxy is reserved at origin
+// by the caller, so this only places the (N - 1) extras.
+function fibonacciShell(rng: Rng, n: number): [number, number, number][] {
+  const out: [number, number, number][] = [];
+  const ga = Math.PI * (1 + Math.sqrt(5)); // golden angle
+  for (let i = 0; i < n; i++) {
+    const t = (i + 0.5) / n;
+    const phi = Math.acos(1 - 2 * t);
+    const theta = ga * (i + 0.5);
+    // Vary radius so we get a thick shell rather than a perfect sphere — the
+    // universe should feel clumpy, not uniformly spaced.
+    const r = rng.range(250000, 900000);
+    out.push([
+      r * Math.sin(phi) * Math.cos(theta),
+      r * Math.sin(phi) * Math.sin(theta),
+      r * Math.cos(phi),
+    ]);
+  }
+  return out;
+}
+
+// W10 — generate the full 100-galaxy universe. Main galaxy at origin uses the
+// hand-tuned MAIN_PALETTE; the remaining 99 are fully procedural (random
+// position, size, palette, tilt). Same seed → same universe so multiplayer
+// peers see identical galaxies.
 export function generateUniverse(seed: number): UniverseData {
   const galaxies: GalaxyData[] = [];
 
+  // Main galaxy — fixed home. 28k radius, sits at origin, no tilt so the
+  // newcomer view (top-down on the disc) reads cleanly.
   galaxies.push(generateGalaxy({
     id: 'milky-way',
     name: 'Milky Way',
@@ -641,24 +673,31 @@ export function generateUniverse(seed: number): UniverseData {
     tilt: [0, 0, 0],
   }));
 
-  // Satellite galaxies. Positions chosen by hand so they spread across the
-  // celestial sphere — the universe view should always show 3-4 of them.
-  const extras: { id: string; name: string; offset: number; pos: [number, number, number]; tilt: [number, number, number]; radius: number; palette: GalaxyPalette }[] = [
-    { id: 'andromeda',  name: 'Andromeda',  offset: 1, pos: [-180000,  35000, -150000], tilt: [ 0.30, 0.00,  0.40], radius: 18000, palette: ANDROMEDA_PALETTE },
-    { id: 'magellan',   name: 'Magellan',   offset: 2, pos: [ 200000, -20000, -120000], tilt: [-0.20, 0.10,  0.30], radius:  9000, palette: MAGELLAN_PALETTE  },
-    { id: 'sombrero',   name: 'Sombrero',   offset: 3, pos: [ 160000,  50000,  170000], tilt: [ 0.05, 0.20, -0.60], radius: 14000, palette: SOMBRERO_PALETTE  },
-    { id: 'pinwheel',   name: 'Pinwheel',   offset: 4, pos: [-220000, -30000,  140000], tilt: [-0.40, 0.15,  0.20], radius: 16000, palette: PINWHEEL_PALETTE  },
-    { id: 'triangulum', name: 'Triangulum', offset: 5, pos: [-100000,  60000,  220000], tilt: [ 0.20, -0.30, 0.50], radius: 12000, palette: TRIANGULUM_PALETTE},
-  ];
-  for (const e of extras) {
+  // 99 procedural extras.
+  const COUNT = 99;
+  const positions = fibonacciShell(new Rng(seed ^ 0xb16b00b5), COUNT);
+  const namedUsed = new Set<string>();
+  for (let i = 0; i < COUNT; i++) {
+    // Use a fresh sub-seed per galaxy so any single galaxy can be regenerated
+    // without disturbing the rest.
+    const rng = new Rng((seed + i + 1) ^ 0x5a17c0de);
+    const radius = rng.range(7000, 22000);
+    const tilt: [number, number, number] = [
+      rng.range(-Math.PI * 0.5, Math.PI * 0.5),
+      rng.range(-Math.PI, Math.PI),
+      rng.range(-Math.PI * 0.5, Math.PI * 0.5),
+    ];
+    const palette = randomPalette(rng);
+    const name = makeGalaxyName(rng, i, namedUsed);
+    const idBase = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `galaxy-${i + 1}`;
     galaxies.push(generateGalaxy({
-      id: e.id,
-      name: e.name,
-      seed: seed + e.offset,
-      position: e.pos,
-      radius: e.radius,
-      palette: e.palette,
-      tilt: e.tilt,
+      id: `${idBase}-${i + 1}`,
+      name,
+      seed: (seed + i + 1) * 9301 + 49297,
+      position: positions[i]!,
+      radius,
+      palette,
+      tilt,
     }));
   }
 

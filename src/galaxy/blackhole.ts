@@ -12,22 +12,26 @@ export interface BlackHoleHandle {
   portalPickProxy: THREE.Mesh;
 }
 
-export function makeBlackHole(): BlackHoleHandle {
+// W10 — every galaxy gets a black hole, scaled to its disc radius. Ratios
+// pulled from the Milky Way preset (radius 28k → inner 400, outer 2400):
+//   inner ≈ radius × 0.0143
+//   outer ≈ radius × 0.0857
+// A 9k-radius satellite galaxy gets inner ≈ 130, outer ≈ 770 — proportional.
+export function makeBlackHole(galaxyRadius = 28000): BlackHoleHandle {
   const group = new THREE.Group();
-  // W9 — supermassive scale-up to match the 28k galaxy disk. Disk inner/outer
-  // grew ~2.7×; the rest (core sphere, halo) follows the same ratios as before.
-  const inner = 400.0;
-  const outer = 2400.0;
+  const inner = galaxyRadius * 0.0143;
+  const outer = galaxyRadius * 0.0857;
 
-  // Black core (slightly larger than inner radius to occlude what's behind)
-  const coreGeo = new THREE.SphereGeometry(inner * 0.9, 48, 48);
+  // Black core (slightly larger than inner radius to occlude what's behind).
+  // W10 perf — 48×48 → 24×24 since the core renders as a flat black disc anyway.
+  const coreGeo = new THREE.SphereGeometry(inner * 0.9, 24, 24);
   const coreMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
   const core = new THREE.Mesh(coreGeo, coreMat);
   group.add(core);
 
   // Portal pick proxy — invisible sphere ~2× the core, so even at galaxy
   // overview distance the click target is comfortable to hit.
-  const proxyGeo = new THREE.SphereGeometry(inner * 1.6, 16, 16);
+  const proxyGeo = new THREE.SphereGeometry(inner * 1.6, 12, 12);
   const proxyMat = new THREE.MeshBasicMaterial({
     transparent: true,
     opacity: 0,
@@ -37,8 +41,11 @@ export function makeBlackHole(): BlackHoleHandle {
   portalPickProxy.userData.kind = 'portal';
   group.add(portalPickProxy);
 
-  // Accretion disk: ring geometry on XY plane (we will tilt the group)
-  const diskGeo = new THREE.RingGeometry(inner, outer, 256, 32);
+  // Accretion disk: ring geometry on XY plane (we will tilt the group).
+  // W10 perf — 256×32 → 96×8. Disk colour comes from a fragment shader so
+  // higher tessellation only mattered for shape silhouette; 96 segs keep the
+  // ring edge smooth at the camera distances we care about.
+  const diskGeo = new THREE.RingGeometry(inner, outer, 96, 8);
   const diskMat = new THREE.ShaderMaterial({
     vertexShader: DISK_VERT,
     fragmentShader: DISK_FRAG,

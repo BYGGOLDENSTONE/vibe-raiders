@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { LayerState } from './types';
 import { generateUniverse } from './generation';
-import { buildUniverse, updateUniverse, setActiveSystem, type UniverseHandle } from './galaxy';
+import { buildUniverse, updateUniverse, setActiveSystem, setActiveGalaxy, hideAllSystemsForUniverseView, systemWorldPositionFromData, type UniverseHandle } from './galaxy';
+import { prebakeBulgeTextures } from './bulge';
 import { CameraController } from './camera-controller';
 import { LabelManager } from './labels';
 import { Picker } from './picking';
@@ -118,10 +119,11 @@ export class App {
     this.labelLayer.className = 'gx-labels';
     this.overlay.appendChild(this.labelLayer);
 
-    // Scene + camera. W9 — far plane bumped from 38k → 600k so the universe
-    // view (camera at ~400k from origin) can still see distant galaxies.
+    // Scene + camera. W10 — far plane bumped to 2M so the universe view
+    // (camera at ~1.2M from origin) can still see galaxies in the far shell
+    // (positioned out to ~900k from origin).
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(55, host.clientWidth / host.clientHeight, 0.05, 600000);
+    this.camera = new THREE.PerspectiveCamera(55, host.clientWidth / host.clientHeight, 0.05, 2000000);
 
     // Subtle ambient (most lighting is in planet shader)
     const ambient = new THREE.AmbientLight(0xffffff, 0.05);
@@ -130,6 +132,10 @@ export class App {
     // W9 — universe with main galaxy + 5 satellite galaxies + cosmetic
     // background discs. Build on the same seed so every player sees the same
     // universe layout.
+    // W10 perf — bake the bulge spiral once into shared textures so every
+    // galaxy can render with a cheap textured-quad shader instead of running
+    // the procedural spiral math per-pixel × 100 bulges.
+    prebakeBulgeTextures(this.renderer);
     const data = generateUniverse(GALAXY_SEED);
     this.universe = buildUniverse(this.scene, data);
 
@@ -147,6 +153,9 @@ export class App {
     const start: LayerState = this.empire.state.homeClaimed
       ? { kind: 'planet', galaxyId: homeGid, systemId: this.empire.state.homeSystemId, planetId: this.empire.state.homePlanetId }
       : { kind: 'galaxy', galaxyId: homeGid, systemId: null, planetId: null };
+    // W10 — activate the home galaxy so its systems are visible from frame 0;
+    // every other galaxy stays as a bulge billboard until clicked.
+    setActiveGalaxy(this.universe, homeGid);
     if (start.kind !== 'galaxy' && start.kind !== 'universe') {
       setActiveSystem(this.universe, start.systemId);
     }
@@ -285,9 +294,10 @@ export class App {
 
   private layerPreset(layer: LayerState): LayerCamPreset {
     if (layer.kind === 'universe') {
-      // W9 — frame the whole Local Group. Camera sits ~400k from origin so
-      // every galaxy bulge fits inside the frustum at 55° FOV.
-      return { distance: 420000, pitch: 0.85, minDist: 80000, maxDist: 540000 };
+      // W10 — frame the whole 100-galaxy universe. Camera sits ~1.2M from
+      // origin; galaxies span out to ~900k radius. Far plane is 2M so this
+      // distance is well inside the frustum.
+      return { distance: 1200000, pitch: 0.85, minDist: 200000, maxDist: 1700000 };
     }
     if (layer.kind === 'galaxy') {
       // W9 — galaxy view distance scales with the active galaxy's radius so
@@ -372,6 +382,17 @@ export class App {
     const preset = this.layerPreset(next);
     const { pos, node } = this.resolveTarget(next);
 
+    // W10 — activate the destination galaxy first (toggles which galaxy's
+    // 200-system mesh subtree is drawn). Labels rebuild for the active galaxy
+    // so we never carry 100 × 200 system labels in the DOM.
+    // Universe view hides ALL system meshes (the bulge billboards already
+    // show each galaxy at that distance) — saves ~400 draw calls per frame.
+    if (next.kind === 'universe') {
+      hideAllSystemsForUniverseView(this.universe);
+    } else if (next.galaxyId) {
+      setActiveGalaxy(this.universe, next.galaxyId);
+      this.labels.activateGalaxy(next.galaxyId);
+    }
     // Activate system immediately so its planets render during the fly
     setActiveSystem(this.universe, next.systemId);
 
@@ -779,12 +800,17 @@ export class App {
       // which already accounts for the per-galaxy offset.
       this.universe.root.updateMatrixWorld(true);
       for (const c of connections) {
+        // W10 — endpoints come from system meshes when the galaxy is built,
+        // and from raw data (with galaxy tilt + offset) otherwise. This lets
+        // T3 / remote-player connections render to galaxies the local player
+        // hasn't visited yet without forcing every galaxy to be activated.
         const sa = this.universe.systems.get(c.a);
         const sb = this.universe.systems.get(c.b);
-        if (!sa || !sb) continue;
-        sa.group.getWorldPosition(tmp);
+        if (sa) sa.group.getWorldPosition(tmp);
+        else if (!systemWorldPositionFromData(this.universe, c.a, tmp)) continue;
         positions.push(tmp.x, tmp.y, tmp.z);
-        sb.group.getWorldPosition(tmp);
+        if (sb) sb.group.getWorldPosition(tmp);
+        else if (!systemWorldPositionFromData(this.universe, c.b, tmp)) continue;
         positions.push(tmp.x, tmp.y, tmp.z);
         const col = new THREE.Color(c.color);
         colors.push(col.r, col.g, col.b, col.r, col.g, col.b);
@@ -1093,12 +1119,11 @@ export class App {
       }
     }
 
-    // 1. Advance the world first. Slow galactic rotation around each galaxy's
-    //    own root (so satellite galaxies rotate too, on their own axes), then
-    //    planet/moon orbits inside each.
-    for (const [, gh] of this.universe.galaxies) {
-      gh.root.rotation.y += dt * 0.010;
-    }
+    // 1. Advance the world first. Slow galactic rotation only on the active
+    //    galaxy's systemsGroup (drift's invisible on the bulge billboard
+    //    anyway, and rotating root would clash with the tilt baked there).
+    const activeGh = this.universe.galaxies.get(this.universe.activeGalaxyId);
+    if (activeGh) activeGh.systemsGroup.rotation.y += dt * 0.010;
     // Billboards (star glow, black hole halo) face the camera position from
     // the previous frame — invisible drift since the camera moves smoothly.
     const prevCamPos = this.camera.position;
@@ -1111,15 +1136,14 @@ export class App {
     this.controller.update(dt);
 
     // 3. Background follows the new camera position so layers always envelop
-    //    the view at any zoom. Distant galaxy billboards live in the same
-    //    skydome shell so they're always visible regardless of camera position.
+    //    the view at any zoom. W10 — cosmetic distant-galaxy billboards are
+    //    gone; the 100 procedural galaxies fill that role themselves.
     const camPos = this.camera.position;
     this.universe.background.skydome.position.copy(camPos);
     const layers = this.universe.background.starLayers;
     if (layers[0]) layers[0].position.copy(camPos);
     if (layers[1]) layers[1].position.copy(camPos);
     if (layers[2]) layers[2].position.copy(camPos);
-    this.universe.background.distantGalaxies.group.position.copy(camPos);
 
     this.renderer.render(this.scene, this.camera);
 

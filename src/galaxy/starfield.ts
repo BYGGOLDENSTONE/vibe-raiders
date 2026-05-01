@@ -1,12 +1,10 @@
 import * as THREE from 'three';
 import { Rng } from './rng';
 import { NEBULA_VERT, NEBULA_FRAG } from './shaders';
-import { buildDistantGalaxies, type DistantGalaxiesHandle } from './distant-galaxies';
 
 export interface BackgroundHandle {
   skydome: THREE.Mesh;
   starLayers: THREE.Points[];
-  distantGalaxies: DistantGalaxiesHandle;
 }
 
 function buildStarLayer(count: number, radius: number, sizeMin: number, sizeMax: number, seed: number): THREE.Points {
@@ -77,9 +75,11 @@ function buildStarLayer(count: number, radius: number, sizeMin: number, sizeMax:
 }
 
 export function buildBackground(): BackgroundHandle {
-  // W9 — skydome scaled 24k → 70k so the 28k galaxy disk has room to breathe
-  // inside the nebula. Star layers shifted in step.
-  const skyGeo = new THREE.SphereGeometry(70000, 32, 32);
+  // W10 — skydome scaled up so it always envelops the universe view
+  // (camera ~1.2M out, far plane 2M). The 100 procedural galaxies fill the
+  // role the cosmetic distant-galaxy billboards used to play, so the skydome
+  // is back to a pure nebula + star sprinkle.
+  const skyGeo = new THREE.SphereGeometry(120000, 32, 32);
   const skyMat = new THREE.ShaderMaterial({
     vertexShader: NEBULA_VERT,
     fragmentShader: NEBULA_FRAG,
@@ -89,13 +89,14 @@ export function buildBackground(): BackgroundHandle {
   const skydome = new THREE.Mesh(skyGeo, skyMat);
   skydome.frustumCulled = false;
 
+  // W10 perf — point counts halved (5500 → 2750). At universe-view distance
+  // the visual difference is negligible but the GPU saves a chunk of vertex
+  // shader work each frame.
   const starLayers = [
-    buildStarLayer(3200, 55000, 1.0, 2.4, 991),  // far
-    buildStarLayer(1600, 40000, 1.4, 3.0, 7311), // mid
-    buildStarLayer(700,  28000, 1.6, 3.8, 1029), // near
+    buildStarLayer(1600, 95000, 1.0, 2.4, 991),  // far
+    buildStarLayer(800,  65000, 1.4, 3.0, 7311), // mid
+    buildStarLayer(350,  42000, 1.6, 3.8, 1029), // near
   ];
 
-  const distantGalaxies = buildDistantGalaxies();
-
-  return { skydome, starLayers, distantGalaxies };
+  return { skydome, starLayers };
 }

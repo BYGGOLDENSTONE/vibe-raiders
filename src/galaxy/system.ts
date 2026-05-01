@@ -77,7 +77,57 @@ export function updateSystem(
   }
 }
 
+// W10 perf — dispose every per-system unique resource so the galaxy can be
+// rebuilt cleanly (and so an old galaxy's meshes can be freed when the player
+// flies into another one). Shared geometries (sphere cache, plane cache) are
+// left alone since other systems still reference them.
+export function disposeSystem(h: SystemHandle): void {
+  // Star — materials only; geometries are shared module-level constants.
+  h.star.material.dispose();
+  (h.star.glow.material as THREE.Material).dispose();
+  (h.star.pickProxy.material as THREE.Material).dispose();
+
+  // Planets — own ShaderMaterial; ring + each moon's orbit line own unique
+  // BufferGeometry. Walk the body Group to catch the moon orbit lines
+  // (which makePlanet adds to body but doesn't store a direct reference to).
+  for (const p of h.planets) {
+    p.material.dispose();
+    if (p.ring) {
+      p.ring.geometry.dispose();
+      (p.ring.material as THREE.Material).dispose();
+    }
+    for (const m of p.moons) {
+      m.material.dispose();
+    }
+    p.body.traverse((obj) => {
+      // Moon orbit lines = THREE.Line under a wrap Group, hung off body.
+      if ((obj as THREE.Line).isLine) {
+        const line = obj as THREE.Line;
+        line.geometry.dispose();
+        (line.material as THREE.Material).dispose();
+      }
+    });
+  }
+
+  // System-level orbit lines (one per planet, attached to the system group).
+  for (const wrap of h.orbitLines) {
+    wrap.traverse((obj) => {
+      if ((obj as THREE.Line).isLine) {
+        const line = obj as THREE.Line;
+        line.geometry.dispose();
+        (line.material as THREE.Material).dispose();
+      }
+    });
+  }
+}
+
 export function setSystemDetail(h: SystemHandle, full: boolean): void {
+  // W10 perf — galaxy view represents every system as a single point inside
+  // the galaxy's shared Points cloud (1 draw call instead of 200 × 2 = 400).
+  // The full StarHandle (sphere core + glow billboard) only turns on when the
+  // system is the focused one in system / planet view.
+  h.star.core.visible = full;
+  h.star.glow.visible = full;
   for (const p of h.planets) {
     p.body.visible = full;
   }

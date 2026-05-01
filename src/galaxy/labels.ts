@@ -45,13 +45,20 @@ export interface HomeMarkerOpts {
   remoteSystemOwners: Map<string, RemoteOwner>;
 }
 
-function tempVec(): THREE.Vector3 { return new THREE.Vector3(); }
-
 export class LabelManager {
   private container: HTMLDivElement;
   private camera: THREE.Camera;
   private labels: Label[] = [];
-  private vTmp = tempVec();
+  private vTmp = new THREE.Vector3();
+  // W10 — non-galaxy labels are built lazily per-galaxy (system/planet/moon).
+  // 100 galaxies × ~200 systems × ~6 planets × ~1.5 moons would be ~290 K DOM
+  // nodes if built upfront — instead we keep galaxy labels (100 nodes) plus
+  // the active galaxy's per-system labels and rebuild on galaxy switch.
+  private activeGalaxyId: string | null = null;
+  private universe: UniverseHandle | null = null;
+  // Stash the home-marker options so a galaxy switch can replay them onto the
+  // freshly-built labels without losing badges (✓ ANNEX, ★ HOME, etc.).
+  private lastHomeOpts: HomeMarkerOpts | null = null;
 
   constructor(container: HTMLDivElement, camera: THREE.Camera) {
     this.container = container;
@@ -59,12 +66,15 @@ export class LabelManager {
   }
 
   build(universe: UniverseHandle): void {
-    // Wipe
+    // Wipe everything — both galaxy labels and any previously-active galaxy's
+    // per-system labels.
     for (const l of this.labels) l.el.remove();
     this.labels = [];
+    this.universe = universe;
+    this.activeGalaxyId = null;
 
-    // W9 — one label per playable galaxy, anchored at its bulge so universe
-    // view shows the galaxies' names + tinted dots.
+    // Galaxy labels stay resident — there's only ~100 of them and the player
+    // sees most of them in universe view.
     for (const [, gh] of universe.galaxies) {
       this.addLabel({
         id: `gx:${gh.data.id}`,
@@ -79,9 +89,33 @@ export class LabelManager {
       });
     }
 
-    for (const [, sys] of universe.systems) {
-      const galaxyId = universe.systemToGalaxy.get(sys.data.id) ?? '';
-      // System label, attached to star core
+    // Build per-system labels for the universe's currently active galaxy so
+    // there's something to show on the very first frame.
+    this.activateGalaxy(universe.activeGalaxyId);
+  }
+
+  // W10 — rebuild system / planet / moon labels for the freshly-active galaxy.
+  // Drops the old galaxy's labels (if any) and creates the new one's. No-op
+  // when the galaxy hasn't actually changed.
+  activateGalaxy(galaxyId: string): void {
+    if (this.activeGalaxyId === galaxyId) return;
+    if (!this.universe) return;
+
+    // Drop any non-galaxy labels — they belong to the previously-active galaxy.
+    const kept: Label[] = [];
+    for (const l of this.labels) {
+      if (l.kind === 'galaxy') {
+        kept.push(l);
+      } else {
+        l.el.remove();
+      }
+    }
+    this.labels = kept;
+    this.activeGalaxyId = galaxyId;
+
+    const gh = this.universe.galaxies.get(galaxyId);
+    if (!gh) return;
+    for (const [, sys] of gh.systems) {
       this.addLabel({
         id: `sys:${sys.data.id}`,
         kind: 'system',
@@ -121,6 +155,9 @@ export class LabelManager {
         }
       }
     }
+
+    // Replay last home markers so the freshly-built labels carry their badges.
+    if (this.lastHomeOpts) this.markHome(this.lastHomeOpts);
   }
 
   private addLabel(p: {
@@ -174,6 +211,7 @@ export class LabelManager {
   // text from cached baseText each call, then re-prefixes per current state.
   // Call this after build() and whenever the empire's owned-planets set changes.
   markHome(opts: HomeMarkerOpts): void {
+    this.lastHomeOpts = opts;
     for (const l of this.labels) {
       type Kind =
         | 'home-planet'
@@ -264,9 +302,29 @@ export class LabelManager {
       galaxyAllowed = new Set(cands.slice(0, N).map((c) => c.id));
     }
 
+    // W10 perf — limit visible galaxy-bulge labels in galaxy / system view to
+    // the closest M others. Without this, all 99 remote galaxy labels project
+    // to screen + write DOM transforms every frame.
+    let bulgeLabelAllowed: Set<string> | null = null;
+    if (layer.kind === 'galaxy' || layer.kind === 'system' || layer.kind === 'planet') {
+      const M = 12;
+      const cands: { id: string; d: number }[] = [];
+      for (const l of this.labels) {
+        if (l.kind !== 'galaxy') continue;
+        if (l.galaxyId === layer.galaxyId) continue;
+        l.worldNode.getWorldPosition(this.vTmp);
+        cands.push({ id: l.id, d: this.vTmp.distanceToSquared(camPos) });
+      }
+      cands.sort((a, b) => a.d - b.d);
+      bulgeLabelAllowed = new Set(cands.slice(0, M).map((c) => c.id));
+    }
+
     for (const l of this.labels) {
       let visible = this.shouldShow(l, layer);
       if (visible && galaxyAllowed && l.kind === 'system' && !galaxyAllowed.has(l.id)) {
+        visible = false;
+      }
+      if (visible && bulgeLabelAllowed && l.kind === 'galaxy' && !bulgeLabelAllowed.has(l.id)) {
         visible = false;
       }
       if (!visible) {
