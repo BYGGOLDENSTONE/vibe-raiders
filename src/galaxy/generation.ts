@@ -321,6 +321,7 @@ function finalizePlanet(
   stub: PlanetStub,
   index: number,
   semiMajor: number,
+  systemId: string,
 ): PlanetData {
   const palette = PLANET_PALETTES[stub.type];
 
@@ -340,8 +341,15 @@ function finalizePlanet(
   const risk = riskFor({ type: stub.type, temperatureC });
   const description = rng.pick(PLANET_DESC_TEMPLATES[stub.type]);
 
+  // W10.1 — globally-unique planet ID. Pre-W10.1 the ID was just `p${index}`,
+  // which collided across the 20 000 systems in the universe and made
+  // `findPlanet(homePlanetId)` return whatever planet with the same local
+  // index was iterated first (often a different system's toxic/ocean world).
+  // Moon IDs are prefixed in lockstep below.
+  const planetId = `${systemId}:p${index}`;
+  const prefixedMoons = stub.moons.map((m) => ({ ...m, id: `${planetId}:${m.id}` }));
   return {
-    id: `p${index}`,
+    id: planetId,
     name: stub.name,
     type: stub.type,
     radius: stub.radius,
@@ -362,7 +370,7 @@ function finalizePlanet(
     secondaryColor: jitter(palette.secondary),
     accentColor: jitter(palette.accent),
     noiseSeed: rng.range(0, 1000),
-    moons: stub.moons,
+    moons: prefixedMoons,
     resource,
     risk,
     description,
@@ -384,6 +392,11 @@ function makeSystem(rng: Rng, position: [number, number, number], palette: Galax
 
   const planetCount = rng.int(4, 7);
 
+  // W9 — galaxy-prefixed system IDs so each galaxy lives in its own namespace.
+  // W10.1 — generate the system ID up front so finalizePlanet can build
+  // globally-unique planet IDs (`<systemId>:p<i>`) from the same string.
+  const systemId = `${idPrefix}:sys-${rng.int(0, 1e9).toString(36)}`;
+
   // Stage 1: pre-compute every planet's properties except final orbit a.
   const stubs: PlanetStub[] = [];
   for (let i = 0; i < planetCount; i++) {
@@ -402,7 +415,7 @@ function makeSystem(rng: Rng, position: [number, number, number], palette: Galax
     const gap = pickPlanetGap(rng);
     const requiredPeriInner = prevApoExt + gap; // inner edge of this planet's path must clear here
     const a = (requiredPeriInner + stub.bodyExtent) / Math.max(0.001, 1 - stub.eccentricity);
-    planets.push(finalizePlanet(rng, stub, i, a));
+    planets.push(finalizePlanet(rng, stub, i, a, systemId));
     prevApoExt = a * (1 + stub.eccentricity) + stub.bodyExtent;
   }
 
@@ -410,10 +423,7 @@ function makeSystem(rng: Rng, position: [number, number, number], palette: Galax
   const description = rng.pick(SYSTEM_DESC_TEMPLATES[economy]);
 
   return {
-    // W9 — galaxy-prefixed system IDs so each galaxy lives in its own
-    // namespace. Empire saves and the relay both use plain strings, so the
-    // prefix just makes lookups across the universe unambiguous.
-    id: `${idPrefix}:sys-${rng.int(0, 1e9).toString(36)}`,
+    id: systemId,
     name,
     starClass,
     starColor: preset.color,

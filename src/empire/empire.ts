@@ -102,6 +102,45 @@ export class Empire {
       if (this.state.homeClaimed === undefined) {
         this.state.homeClaimed = !!this.state.homePlanetId;
       }
+      // Self-heal: a save claiming homeClaimed=true must still point to a
+      // planet that exists in the current universe AND passes the strict
+      // habitable-rocky-with-moon filter. If anything drifted (stale planet
+      // ID after a generator change, or a legacy save where the bootstrap
+      // landed on a non-rocky world), reset the home so the bootstrap below
+      // can repick a proper one.
+      if (this.state.homeClaimed) {
+        const home = findPlanet(this.universe, this.state.homePlanetId);
+        if (!home || !isStartingEligible(home)) {
+          console.warn('[empire] home planet failed eligibility check, resetting',
+            { homePlanetId: this.state.homePlanetId, type: home?.type, temp: home?.temperatureC, moons: home?.moons.length });
+          this.state.homeClaimed = false;
+          this.state.homeSystemId = '';
+          this.state.homePlanetId = '';
+          this.state.ownedPlanets = [];
+          this.state.claimedSystems = {};
+          this.state.outpostMoonId = null;
+        } else {
+          // Scrub ownedPlanets and claimedSystems for stale IDs (e.g. a save
+          // from before W10.1 globally-unique planet IDs would have entries
+          // like "p2" that now resolve to a random other system's planet).
+          const keptOwned = this.state.ownedPlanets.filter((pid) => !!findPlanet(this.universe, pid));
+          if (keptOwned.length !== this.state.ownedPlanets.length) {
+            console.warn('[empire] dropped invalid ownedPlanets entries',
+              { before: this.state.ownedPlanets.length, after: keptOwned.length });
+            this.state.ownedPlanets = keptOwned;
+          }
+          const keptClaimed: Record<string, number> = {};
+          for (const [sid, tier] of Object.entries(this.state.claimedSystems)) {
+            if (findSystem(this.universe, sid)) keptClaimed[sid] = tier;
+          }
+          this.state.claimedSystems = keptClaimed;
+          if (this.state.outpostMoonId) {
+            // Outpost moon must belong to an owned planet AND still exist.
+            const ctx = this.outpostMoonContext();
+            if (!ctx) this.state.outpostMoonId = null;
+          }
+        }
+      }
       // W5: dormant solo saves (W4-D era, homeClaimed=false) get bootstrapped
       // to an auto-picked homeworld. In MP we never auto-pick — the spawn
       // system comes from the relay (W6-D), so an unclaimed MP save stays
@@ -128,7 +167,12 @@ export class Empire {
     // W9 — every player spawns in the main galaxy regardless of which extras
     // exist. Satellites are intergalactic destinations, not spawn slots.
     const pick = pickStartingPlanet(this.mainGalaxy);
-    if (!pick) return; // ~impossible with ~200 systems, but keep dormant if it happens
+    if (!pick) {
+      console.warn('[empire] bootstrap: no eligible rocky+moon+temperate planet found');
+      return; // ~impossible with ~200 systems, but keep dormant if it happens
+    }
+    console.log('[empire] bootstrap → home planet picked',
+      { system: pick.system.name, planet: pick.planet.name, type: pick.planet.type, temp: pick.planet.temperatureC, moons: pick.planet.moons.length });
     this.state.homeClaimed = true;
     this.state.homeSystemId = pick.system.id;
     this.state.homePlanetId = pick.planet.id;
@@ -144,18 +188,13 @@ export class Empire {
     // W9 — only main galaxy systems are valid spawn points.
     const sys = this.mainGalaxy.systems.find((s) => s.id === systemId);
     if (!sys) return false;
-    let temperate: PlanetData | null = null;
-    let any: PlanetData | null = null;
+    // Strict habitable rocky+moon, no fallback. The eligibleSpawnSystemIds
+    // filter already guarantees the relay won't assign us a system that fails
+    // this check, so a null here indicates a desynced relay/client universe.
+    let planet: PlanetData | null = null;
     for (const p of sys.planets) {
-      if (p.type !== 'rocky') continue;
-      if (p.moons.length === 0) continue;
-      if (!any) any = p;
-      if (!temperate && p.temperatureC >= -30 && p.temperatureC <= 50) {
-        temperate = p;
-        break;
-      }
+      if (isStartingEligible(p)) { planet = p; break; }
     }
-    const planet = temperate ?? any;
     if (!planet) return false;
     this.state.homeClaimed = true;
     this.state.homeSystemId = sys.id;
@@ -175,10 +214,13 @@ export class Empire {
     const out: string[] = [];
     for (const s of this.mainGalaxy.systems) {
       for (const p of s.planets) {
-        if (p.type === 'rocky' && p.moons.length > 0) { out.push(s.id); break; }
+        if (isStartingEligible(p)) { out.push(s.id); break; }
       }
     }
-    return out;
+    // Shuffle so the relay's first-fit pick lands on a different system every
+    // session — without this, every fresh client serves the relay the same
+    // galaxy-order list and the lowest-index unclaimed system always wins.
+    return shuffleInPlace(out);
   }
 
   // --- Read-only getters ----------------------------------------------------
@@ -197,11 +239,15 @@ export class Empire {
   homeGalaxyId(): string {
     return this.mainGalaxy.id;
   }
-  // True for any rocky planet that has at least one moon — eligible homeworld.
-  // Used by the auto-pick at empire creation and by W6 (multiplayer) to decide
-  // which planets are valid claim candidates.
+  // True for any rocky planet that has at least one moon AND a temperate
+  // climate (-30°C..50°C → "habitable"). Rocky guarantees the metal+water
+  // baseline income that the Tier I-III west chain costs assume; the moon
+  // requirement keeps Moon Outpost reachable; the temperature window enforces
+  // habitability so a frozen / volcanic rocky world can never be the start.
+  // Single source of truth: every starting-planet picker (solo + MP) and the
+  // MP spawn-eligibility list go through this.
   isHomeworldEligible(planet: PlanetData): boolean {
-    return planet.type === 'rocky' && planet.moons.length > 0;
+    return isStartingEligible(planet);
   }
 
   // --- W5: System Expansion -----------------------------------------------
@@ -835,25 +881,47 @@ function createEmptyEmpire(seed: number): EmpireState {
   };
 }
 
-// Pick a deterministic starting planet from the galaxy. Prefers temperate
-// rocky+moon worlds, falls back to any rocky+moon planet (the catalogue's
-// "metal+water baseline" assumption needs both).
+// True iff a planet meets every starting-planet rule:
+//   - ocean type → green/blue habitable visual + metal+water baseline income
+//     (PLANET_INCOME[ocean] now matches the cost catalogue's metal+water assumption)
+//   - ≥1 moon → Moon Outpost is reachable from the home planet
+//   - temperate (-30°C..50°C) → frozen/scorched ocean worlds are rejected
+// Single source of truth shared by solo bootstrap, MP bootstrap, and the MP
+// spawn-eligibility list. No fallback path — if no planet qualifies the empire
+// stays dormant rather than landing on a non-habitable world.
+function isStartingEligible(planet: PlanetData): boolean {
+  if (planet.type !== 'ocean') return false;
+  if (planet.moons.length === 0) return false;
+  if (planet.temperatureC < -30 || planet.temperatureC > 50) return false;
+  return true;
+}
+
+// Pick a random starting planet from the galaxy — strict habitable rocky+moon
+// only, no fallback. Returns null if every planet fails the filter (vanishingly
+// rare with ~200 systems but the empire stays dormant cleanly). Randomness is
+// per-page-load (Math.random) so each fresh save lands on a different system;
+// once persisted, homeSystemId is sticky across reloads.
 function pickStartingPlanet(galaxy: GalaxyData): { system: SystemData; planet: PlanetData } | null {
-  let temperateMatch: { system: SystemData; planet: PlanetData } | null = null;
-  let anyMatch: { system: SystemData; planet: PlanetData } | null = null;
+  const eligible: { system: SystemData; planet: PlanetData }[] = [];
   for (const s of galaxy.systems) {
     for (const p of s.planets) {
-      if (p.type !== 'rocky') continue;
-      if (p.moons.length === 0) continue;
-      if (!anyMatch) anyMatch = { system: s, planet: p };
-      if (!temperateMatch && p.temperatureC >= -30 && p.temperatureC <= 50) {
-        temperateMatch = { system: s, planet: p };
+      if (isStartingEligible(p)) {
+        eligible.push({ system: s, planet: p });
+        break; // one home per system is enough for the picker
       }
-      if (temperateMatch) break;
     }
-    if (temperateMatch) break;
   }
-  return temperateMatch ?? anyMatch;
+  if (eligible.length === 0) return null;
+  const idx = Math.floor(Math.random() * eligible.length);
+  return eligible[idx]!;
+}
+
+function shuffleInPlace<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j]!, arr[i]!];
+  }
+  return arr;
 }
 
 function findPlanet(universe: UniverseData, planetId: string): PlanetData | null {

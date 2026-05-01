@@ -64,8 +64,9 @@ export interface PlanetIncome {
 }
 
 export const PLANET_INCOME: Record<PlanetType, PlanetIncome> = {
-  rocky:  { primary: { resource: 'metal',    rate: 3 }, secondary: { resource: 'water',  rate: 1.5 } },
-  ocean:  { primary: { resource: 'water',    rate: 3 }, secondary: { resource: 'gas',    rate: 1.5 } },
+  // W10.1 — ocean is the habitable starting planet; rocky shifted to crystal/metal.
+  ocean:  { primary: { resource: 'metal',    rate: 3 }, secondary: { resource: 'water',  rate: 1.5 } },
+  rocky:  { primary: { resource: 'crystal',  rate: 3 }, secondary: { resource: 'metal',  rate: 1.5 } },
   gas:    { primary: { resource: 'gas',      rate: 3 }, secondary: { resource: 'plasma', rate: 1.5 } },
   ice:    { primary: { resource: 'crystal',  rate: 3 }, secondary: { resource: 'water',  rate: 1.5 } },
   lava:   { primary: { resource: 'plasma',   rate: 3 }, secondary: { resource: 'metal',  rate: 1.5 } },
@@ -167,14 +168,14 @@ export interface EmpireState {
   lastSavedAt: number;
 }
 
-// W10 — bumped from v7: 100-galaxy universe means every system ID prefix and
-// position rolled forward, so older saves' homeSystemId / claimedSystems
-// references are stale. Old saves auto-discard so the new universe takes hold
-// cleanly.
-export const STORAGE_KEY_SOLO = 'vibecoder.empire.v8';
+// W10.1 — bumped from v9: planet IDs are now globally unique (`<systemId>:p<i>`)
+// so old saves' homePlanetId / ownedPlanets entries (`p2`, `p3`, …) resolve to
+// nothing. Old saves auto-discard so every player picks up a clean homeworld
+// keyed against the new ID format.
+export const STORAGE_KEY_SOLO = 'vibecoder.empire.v10';
 // W6 — multiplayer keeps a separate save so the solo career isn't disturbed
-// when the player drops into a shared galaxy and back. Also bumped for W10.
-export const STORAGE_KEY_MP = 'vibecoder.empire.mp.v3';
+// when the player drops into a shared galaxy and back. Also bumped for W10.1.
+export const STORAGE_KEY_MP = 'vibecoder.empire.mp.v5';
 
 // Game mode determines which save slot is used and whether multiplayer state
 // is wired up. Selected on the start screen and threaded through Empire +

@@ -224,8 +224,12 @@ export default class GalaxyServer implements Party.Server {
       return;
     }
 
+    // Build the taken-system set across all known players so two empires
+    // never share a starting system. Idempotent reassign for the caller is
+    // already handled above (existing.state.systemId short-circuit).
     const taken = new Set<string>();
     for (const p of Object.values(this.players)) {
+      if (p.id === playerId) continue;
       if (p.state.systemId) taken.add(p.state.systemId);
     }
 
